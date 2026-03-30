@@ -12,6 +12,7 @@ import Connect_with_Me from './Connect_with_Me';
 import ArticlePage from './ArticlePage';
 import BlogPage from './BlogPage';
 import Admin from './Admin';
+import NotFound from './components/NotFound';
 import { PROJECTS_DATA, BLOG_DATA } from './data';
 import { useContent, useSettings, useSocialLinks, useBlogPosts } from './hooks/useContent';
 import * as LucideIcons from 'lucide-react';
@@ -1091,22 +1092,6 @@ const Footer = () => (
       </p>
     </div>
   </footer>
-);
-
-const NotFound = () => (
-  <div className="min-h-[60vh] flex flex-col items-center justify-center text-center px-8">
-    <h1 className="text-9xl font-bold text-accent mb-4">404</h1>
-    <h2 className="text-3xl font-bold mb-8">Page Not Found</h2>
-    <p className="text-secondary mb-12 max-w-md">
-      The page you are looking for might have been removed, had its name changed, or is temporarily unavailable.
-    </p>
-    <Link 
-      to="/" 
-      className="bg-primary text-page px-8 py-4 rounded-full font-headline font-medium text-sm hover:scale-105 transition-transform"
-    >
-      Back to Home
-    </Link>
-  </div>
 );
 
 export default function App() {

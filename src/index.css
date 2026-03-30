@@ -71,7 +71,19 @@
   }
 }
 
-.typewriter-cursor::after {
-  content: '|';
-  @apply text-accent animate-pulse ml-1;
+.designer-scrollbar::-webkit-scrollbar {
+  height: 4px;
+}
+.designer-scrollbar::-webkit-scrollbar-track {
+  background: var(--border);
+  border-radius: 10px;
+}
+.designer-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-accent);
+  border-radius: 10px;
+  opacity: 0.5;
+}
+.designer-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent);
+  opacity: 0.8;
 }
