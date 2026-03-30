@@ -97,17 +97,15 @@ const Navbar = ({ isDark, toggleDarkMode }: { isDark: boolean; toggleDarkMode: (
           ))}
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="hidden md:flex items-center gap-4">
-            <motion.button
-              onClick={toggleDarkMode}
-              animate={{ rotate: isDark ? 180 : 0 }}
-              transition={{ duration: 0.3 }}
-              className="p-2 text-accent"
-            >
-              {isDark ? <Sun className="w-[18px] h-[18px]" strokeWidth={2} /> : <Moon className="w-[18px] h-[18px]" strokeWidth={2} />}
-            </motion.button>
-          </div>
+        <div className="flex items-center gap-2 md:gap-4">
+          <motion.button
+            onClick={toggleDarkMode}
+            animate={{ rotate: isDark ? 180 : 0 }}
+            transition={{ duration: 0.3 }}
+            className="p-2 text-accent"
+          >
+            {isDark ? <Sun className="w-[18px] h-[18px]" strokeWidth={2} /> : <Moon className="w-[18px] h-[18px]" strokeWidth={2} />}
+          </motion.button>
           <button 
             className="md:hidden p-2 text-primary"
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -128,14 +126,6 @@ const Navbar = ({ isDark, toggleDarkMode }: { isDark: boolean; toggleDarkMode: (
           >
             <div className="flex justify-between items-center mb-4">
               <span className="font-mono text-[10px] uppercase tracking-widest text-secondary">MENU</span>
-              <motion.button
-                onClick={toggleDarkMode}
-                animate={{ rotate: isDark ? 180 : 0 }}
-                transition={{ duration: 0.3 }}
-                className="p-2 text-accent"
-              >
-                {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-              </motion.button>
             </div>
             <div className="flex flex-col gap-6">
               {navLinks.map((link) => (
@@ -1182,10 +1172,11 @@ export default function App() {
 
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('theme') === 'dark' || 
-        (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme) return savedTheme === 'dark';
+      return true; // Default to dark
     }
-    return false;
+    return true;
   });
 
   useEffect(() => {
