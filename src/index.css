@@ -1,0 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-headline: "Bricolage Grotesque", sans-serif;
+  --font-body: "Bricolage Grotesque", sans-serif;
+  --font-mono: "DM Mono", monospace;
+
+  --color-accent: #da755b;
+  --color-gold: #c5a028;
+  
+  /* Map CSS variables to Tailwind colors */
+  --color-page: var(--bg);
+  --color-primary: var(--text);
+  --color-card: var(--card);
+  --color-divider: var(--divider);
+  --color-muted: var(--border);
+  --color-secondary: var(--secondary);
+  --color-nav: var(--nav-bg);
+  --color-alt: var(--alt-bg);
+}
+
+:root {
+  --bg: #f2f0e4;
+  --text: #242424;
+  --card: #eceae0;
+  --divider: #d8d9c8;
+  --border: rgba(36,36,36,0.1);
+  --secondary: #8a8680;
+  --nav-bg: rgba(242, 240, 228, 0.88);
+  --alt-bg: #d8d9c8;
+}
+
+.dark {
+  --bg: #242424;
+  --text: #f2f0e4;
+  --card: #2e2d2a;
+  --divider: #1a1a18;
+  --border: rgba(242, 240, 228, 0.08);
+  --secondary: #7a7570;
+  --nav-bg: rgba(36, 36, 36, 0.88);
+  --alt-bg: #1a1a18;
+}
+
+@layer base {
+  * {
+    @apply transition-[background-color,color,border-color] duration-300 ease-in-out;
+  }
+
+  body {
+    @apply bg-page text-primary font-body text-[16px] leading-[1.75] selection:bg-accent selection:text-white;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-headline font-bold tracking-[-0.03em];
+  }
+
+  .terracotta-italic {
+    @apply text-accent italic font-normal;
+  }
+
+  .gold-italic {
+    @apply text-gold italic font-normal;
+  }
+}
+
+@layer utilities {
+  .diagonal-lines {
+    background-image: repeating-linear-gradient(45deg, currentColor 0, currentColor 1px, transparent 0, transparent 50%);
+    background-size: 10px 10px;
+  }
+}
+
+.typewriter-cursor::after {
+  content: '|';
+  @apply text-accent animate-pulse ml-1;
+}
