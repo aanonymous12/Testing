@@ -174,6 +174,11 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// Test route
+app.get("/api/v1/test", (req, res) => {
+  res.json({ message: "API is working correctly", timestamp: new Date().toISOString() });
+});
+
 // File upload endpoint with strict validation
 app.post("/api/v1/upload", uploadLimiter, (req, res, next) => {
   console.log("Upload request received");
@@ -1076,10 +1081,14 @@ END:VCARD`;
   // Global error handler
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error("Unhandled server error:", err);
-    res.status(500).json({ 
-      error: "Internal server error", 
-      message: process.env.NODE_ENV === 'production' ? "An unexpected error occurred" : err.message 
-    });
+    // Ensure we always return JSON for API routes
+    if (req.path.startsWith('/api')) {
+      return res.status(500).json({ 
+        error: "Internal server error", 
+        message: process.env.NODE_ENV === 'production' ? "An unexpected error occurred" : err.message 
+      });
+    }
+    next(err);
   });
 
 async function startServer() {
@@ -1120,6 +1129,10 @@ async function startServer() {
   }
 }
 
-startServer();
+// In Vercel, we don't call startServer() because it's async and registers static routes
+// which Vercel handles better via vercel.json. We only call it in non-Vercel environments.
+if (!process.env.VERCEL) {
+  startServer();
+}
 
 export default app;
