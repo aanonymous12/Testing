@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
@@ -165,65 +164,72 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-async function startServer() {
-  const PORT = 3000;
-
-  // File upload endpoint with strict validation
-  app.post("/api/v1/upload", uploadLimiter, (req, res, next) => {
-    console.log("Upload request received");
-    upload.single('file')(req, res, (err) => {
-      if (err instanceof multer.MulterError) {
-        console.error("Multer error:", err);
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return res.status(400).json({ error: "File too large. Max size is 5MB." });
-        }
-        return res.status(400).json({ error: err.message });
-      } else if (err) {
-        console.error("Unknown upload error:", err);
-        return res.status(400).json({ error: err.message });
-      }
-      next();
-    });
-  }, async (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
-
-    try {
-      const file = req.file;
-      const fileExt = file.originalname.split('.').pop();
-      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-      const filePath = `public/${fileName}`;
-
-      console.log(`Uploading file to Supabase: ${fileName} (${file.mimetype})`);
-
-      // Upload to Supabase from server
-      const { data, error: uploadError } = await supabase.storage
-        .from('images')
-        .upload(filePath, file.buffer, {
-          contentType: file.mimetype,
-          upsert: false
-        });
-
-      if (uploadError) {
-        console.error("Supabase storage error:", uploadError);
-        throw uploadError;
-      }
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('images')
-        .getPublicUrl(filePath);
-
-      console.log("Upload successful:", publicUrl);
-      res.json({ url: publicUrl });
-    } catch (error: any) {
-      console.error("Upload processing error:", error);
-      res.status(500).json({ error: error.message || "Failed to upload file to storage" });
-    }
+// Health check
+app.get("/api/health", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    env: process.env.NODE_ENV,
+    vercel: !!process.env.VERCEL,
+    supabase: !!process.env.VITE_SUPABASE_URL
   });
+});
 
-  // API routes
-  app.post("/api/v1/notify", contactLimiter, async (req, res) => {
+// File upload endpoint with strict validation
+app.post("/api/v1/upload", uploadLimiter, (req, res, next) => {
+  console.log("Upload request received");
+  upload.single('file')(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      console.error("Multer error:", err);
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: "File too large. Max size is 5MB." });
+      }
+      return res.status(400).json({ error: err.message });
+    } else if (err) {
+      console.error("Unknown upload error:", err);
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded" });
+  }
+
+  try {
+    const file = req.file;
+    const fileExt = file.originalname.split('.').pop();
+    const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+    const filePath = `public/${fileName}`;
+
+    console.log(`Uploading file to Supabase: ${fileName} (${file.mimetype})`);
+
+    // Upload to Supabase from server
+    const { data, error: uploadError } = await supabase.storage
+      .from('images')
+      .upload(filePath, file.buffer, {
+        contentType: file.mimetype,
+        upsert: false
+      });
+
+    if (uploadError) {
+      console.error("Supabase storage error:", uploadError);
+      throw uploadError;
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('images')
+      .getPublicUrl(filePath);
+
+    console.log("Upload successful:", publicUrl);
+    res.json({ url: publicUrl });
+  } catch (error: any) {
+    console.error("Upload processing error:", error);
+    res.status(500).json({ error: error.message || "Failed to upload file to storage" });
+  }
+});
+
+// API routes
+app.post("/api/v1/notify", contactLimiter, async (req, res) => {
     const { type, data: rawData } = req.body;
     const recipient = process.env.ADMIN_EMAIL || "prankytv736@gmail.com";
 
@@ -962,18 +968,23 @@ END:VCARD`;
 
   // Proxy login route for rate limiting
   app.post("/api/v1/auth/login", loginLimiter, async (req, res) => {
+    console.log("Login attempt received for:", req.body?.email);
     try {
       const { email, password } = LoginSchema.parse(req.body);
+      console.log("Login schema validation passed");
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) {
+        console.error("Supabase login error:", error.message);
         return res.status(401).json({ error: error.message });
       }
+      console.log("Login successful for:", email);
       res.json(data);
     } catch (error: any) {
+      console.error("Login route error:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Invalid login format" });
+        return res.status(400).json({ error: "Invalid login format", details: error.issues });
       }
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: error.message || "Internal server error" });
     }
   });
 
@@ -1071,18 +1082,33 @@ END:VCARD`;
     });
   });
 
+async function startServer() {
+  const PORT = 3000;
+
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    try {
+      // Dynamic import to avoid issues in production where vite is not installed
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (e) {
+      console.warn("Vite could not be initialized:", e);
+    }
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      // Check if file exists before sending
+      const indexPath = path.join(distPath, 'index.html');
+      res.sendFile(indexPath, (err) => {
+        if (err) {
+          res.status(404).send("Frontend build not found. Please run 'npm run build' first.");
+        }
+      });
     });
   }
 
