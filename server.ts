@@ -47,9 +47,19 @@ const LoginSchema = z.object({
   password: z.string().min(1).max(100),
 });
 
+const supabaseUrl = process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error("################################################################");
+  console.error("CRITICAL ERROR: Supabase environment variables are missing!");
+  console.error("Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your environment.");
+  console.error("################################################################");
+}
+
 const supabase = createClient(
-  process.env.VITE_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY!
+  supabaseUrl || 'https://placeholder.supabase.co',
+  supabaseKey || 'placeholder'
 );
 
 // Rate limiters
@@ -139,23 +149,24 @@ const getServiceAccountAuth = () => {
   });
 };
 
+const app = express();
+
+// Trust proxy if behind a reverse proxy (like Cloud Run/Nginx/Vercel)
+app.set('trust proxy', 1);
+
+app.use(express.json());
+
+// Email transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+});
+
 async function startServer() {
-  const app = express();
   const PORT = 3000;
-
-  // Trust proxy if behind a reverse proxy (like Cloud Run/Nginx)
-  app.set('trust proxy', 1);
-
-  app.use(express.json());
-  
-  // Email transporter
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_APP_PASSWORD,
-    },
-  });
 
   // File upload endpoint with strict validation
   app.post("/api/v1/upload", uploadLimiter, (req, res, next) => {
@@ -1075,9 +1086,14 @@ END:VCARD`;
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  // Only listen if not running as a serverless function (Vercel)
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
 }
 
 startServer();
+
+export default app;
