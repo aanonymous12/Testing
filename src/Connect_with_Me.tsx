@@ -4,25 +4,52 @@ import * as LucideIcons from 'lucide-react';
 import { 
   Mail, Globe, Phone, UserPlus, Share2, ArrowLeft,
   ExternalLink, MapPin, Loader2, X, Download, MessageCircle,
-  Facebook, Twitter, Linkedin, Link as LinkIcon, MoreHorizontal
+  Facebook, Twitter, Linkedin, Link as LinkIcon, MoreHorizontal,
+  CheckCircle, Send
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { tracking } from './lib/tracking';
 import { useSettings, useSocialLinks } from './hooks/useContent';
+import { supabase } from './lib/supabase';
+import SEO from './components/SEO';
 import QRCode from 'qrcode';
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
 
 const Connect_with_Me = () => {
   const { settings, loading: settingsLoading } = useSettings();
   const { socialLinks, loading: socialLoading } = useSocialLinks();
+  
+  React.useEffect(() => {
+    tracking.trackPageView();
+  }, []);
+
   const [showQR, setShowQR] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [isGeneratingVCard, setIsGeneratingVCard] = useState(false);
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [showExchangeModal, setShowExchangeModal] = useState(false);
+  const [exchangeName, setExchangeName] = useState('');
+  const [exchangePhone, setExchangePhone] = useState('+1 ');
+  const [exchangeEmail, setExchangeEmail] = useState('');
+  const [exchangeNote, setExchangeNote] = useState('');
+  const [isExchanging, setIsExchanging] = useState(false);
+
+  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
 
   const handleSaveContact = async () => {
     setIsGeneratingVCard(true);
     try {
       const name = settings.connect_name || settings.hero_name || 'Janak Panthi';
-      const phone = settings.connect_phone || settings.contact_phone || '+977 98XXXXXXXX';
-      const email = settings.connect_email || settings.contact_email || 'hello@janakpanthi.com';
+      const phone = settings.connect_phone || settings.contact_phone || '+1 234 567 890';
+      const email = settings.connect_email || settings.contact_email || 'contact@janakpanthi.com.np';
       const url = settings.connect_website || settings.contact_website || 'janakpanthi.com.np';
       const title = settings.connect_subtitle || settings.hero_subtitle || 'Undergraduate Research Assistant';
       const org = settings.connect_address || settings.contact_address || 'Texas State University';
@@ -33,20 +60,23 @@ const Connect_with_Me = () => {
 
       let photoBase64 = '';
       const imageUrl = settings.connect_image || settings.about_image || "https://www.janakpanthi.com.np/Resources/images/janak_panthi.jpg";
-      if (imageUrl) {
+      if (imageUrl && imageUrl.startsWith('http')) {
         try {
-          const response = await fetch(imageUrl);
+          const response = await fetch(imageUrl, { mode: 'cors' });
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
           const blob = await response.blob();
-          photoBase64 = await new Promise((resolve) => {
+          photoBase64 = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onloadend = () => {
               const base64String = (reader.result as string).split(',')[1];
               resolve(base64String);
             };
+            reader.onerror = reject;
             reader.readAsDataURL(blob);
           });
         } catch (error) {
-          console.error('Error fetching image for vCard:', error);
+          console.error('Error fetching image for vCard (likely CORS or invalid URL):', error);
+          // Continue without photo if fetch fails
         }
       }
 
@@ -80,7 +110,7 @@ END:VCARD`;
       URL.revokeObjectURL(blobURL);
     } catch (error) {
       console.error('vCard generation failed:', error);
-      alert('Failed to generate contact card.');
+      showNotification('Failed to generate contact card.', 'error');
     } finally {
       setIsGeneratingVCard(false);
     }
@@ -126,7 +156,7 @@ END:VCARD`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
-    alert('Link copied to clipboard!');
+    showNotification('Link copied to clipboard!');
   };
 
   const shareOptions = [
@@ -197,9 +227,70 @@ END:VCARD`;
   ];
 
   const handleWhatsApp = () => {
-    const phone = (settings.connect_phone || settings.contact_phone || '17373889174').replace(/\D/g, '');
+    const phone = (settings.connect_phone || settings.contact_phone || '+9779847000000').replace(/\D/g, '');
     window.open(`https://wa.me/${phone}`, '_blank');
   };
+
+  const handleExchangeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!exchangeName || !exchangePhone) return;
+    
+    setIsExchanging(true);
+    try {
+      const { error } = await supabase
+        .from('contact_exchanges')
+        .insert([{ 
+          name: exchangeName, 
+          phone: exchangePhone, 
+          email: exchangeEmail,
+          note: exchangeNote
+        }]);
+      
+      if (error) throw error;
+      
+      // Send email notification to admin
+      try {
+        await fetch('/api/v1/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'contact_exchange',
+            data: {
+              name: exchangeName,
+              phone: exchangePhone,
+              email: exchangeEmail,
+              note: exchangeNote
+            }
+          })
+        });
+      } catch (notifyErr) {
+        console.error('Failed to notify admin:', notifyErr);
+      }
+      
+      showNotification('Contact shared successfully!');
+      setShowExchangeModal(false);
+      setExchangeName('');
+      setExchangePhone('');
+      setExchangeEmail('');
+      setExchangeNote('');
+    } catch (err: any) {
+      console.error('Exchange error:', err);
+      showNotification('Failed to share contact: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsExchanging(false);
+    }
+  };
+
+  React.useEffect(() => {
+    if (showQR || showExchangeModal) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
+    }
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, [showQR, showExchangeModal]);
 
   if (settingsLoading || socialLoading) {
     return (
@@ -209,9 +300,11 @@ END:VCARD`;
     );
   }
 
+  const showPhone = settings.show_phone_on_connect !== 'false';
+
   const contactInfo = [
-    { label: 'Email', value: settings.connect_email || settings.contact_email || 'hello@janakpanthi.com', icon: Mail, href: `mailto:${settings.connect_email || settings.contact_email || 'hello@janakpanthi.com'}` },
-    { label: 'Phone', value: settings.connect_phone || settings.contact_phone || '+977 98XXXXXXXX', icon: Phone, href: `tel:${settings.connect_phone || settings.contact_phone || '+97798XXXXXXXX'}` },
+    { label: 'Email', value: settings.connect_email || settings.contact_email || 'contact@janakpanthi.com.np', icon: Mail, href: `mailto:${settings.connect_email || settings.contact_email || 'contact@janakpanthi.com.np'}` },
+    ...(showPhone ? [{ label: 'Phone', value: settings.connect_phone || settings.contact_phone || '+977 98XXXXXXXX', icon: Phone, href: `tel:${(settings.connect_phone || settings.contact_phone || '+9779847000000').replace(/\s+/g, '')}` }] : []),
     { label: 'Website', value: settings.connect_website || settings.contact_website || 'janakpanthi.com.np', icon: Globe, href: (settings.connect_website || settings.contact_website) ? ((settings.connect_website || settings.contact_website).startsWith('http') ? (settings.connect_website || settings.contact_website) : `https://${settings.connect_website || settings.contact_website}`) : 'https://janakpanthi.com.np' },
     { label: 'Location', value: settings.connect_address || settings.contact_address || 'San Marcos, Texas', icon: MapPin, href: '#' },
   ];
@@ -220,6 +313,35 @@ END:VCARD`;
 
   return (
     <div className="min-h-screen bg-page text-primary font-body selection:bg-accent selection:text-page pb-12">
+      <SEO 
+        title={settings.connect_name || settings.hero_name || "Janak Panthi"}
+        description={settings.connect_bio || "Connect with me via my digital business card."}
+        image={settings.connect_image || settings.about_image || "https://www.janakpanthi.com.np/Resources/images/janak_panthi.jpg"}
+        url={window.location.href}
+      />
+      
+      {/* Inline Notification */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-6 left-1/2 -translate-x-1/2 z-[200] w-[90%] max-w-xs"
+          >
+            <div className={cn(
+              "px-4 py-3 rounded-2xl shadow-xl flex items-center justify-center gap-3 backdrop-blur-md border",
+              notification.type === 'success' 
+                ? "bg-green-500/90 border-green-400 text-white" 
+                : "bg-red-500/90 border-red-400 text-white"
+            )}>
+              {notification.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <X className="w-4 h-4" />}
+              <p className="text-xs font-bold font-headline tracking-tight">{notification.message}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header / Back Button */}
       <div className="max-w-md mx-auto px-6 pt-8 flex justify-between items-center">
         <Link to="/" className="p-2 rounded-full bg-card border border-muted text-secondary hover:text-accent transition-colors">
@@ -239,8 +361,19 @@ END:VCARD`;
         <div className="relative">
           {/* Banner / Background Decor */}
           <div className="h-32 w-full bg-accent/10 rounded-3xl overflow-hidden relative">
-            <div className="absolute inset-0 diagonal-lines opacity-10"></div>
-            <div className="absolute -right-4 -top-4 w-24 h-24 bg-accent/20 rounded-full blur-2xl"></div>
+            {settings.connect_banner ? (
+              <img 
+                src={settings.connect_banner} 
+                alt="Banner" 
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <>
+                <div className="absolute inset-0 diagonal-lines opacity-10"></div>
+                <div className="absolute -right-4 -top-4 w-24 h-24 bg-accent/20 rounded-full blur-2xl"></div>
+              </>
+            )}
           </div>
 
           {/* Profile Info */}
@@ -285,35 +418,6 @@ END:VCARD`;
               </p>
             </motion.div>
           </div>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="grid grid-cols-3 gap-3 mt-10">
-          <button 
-            onClick={handleSaveContact}
-            disabled={isGeneratingVCard}
-            className="flex flex-col items-center justify-center gap-2 bg-primary text-page py-5 rounded-[24px] font-headline font-bold text-[9px] uppercase tracking-[0.15em] hover:scale-[1.02] active:scale-95 transition-all shadow-xl shadow-primary/20 disabled:opacity-50"
-          >
-            {isGeneratingVCard ? <Loader2 className="w-5 h-5 animate-spin" /> : <UserPlus className="w-5 h-5" />}
-            Save
-          </button>
-          <button 
-            onClick={() => {
-              const phone = (settings.connect_phone || settings.contact_phone || '17373889174').replace(/\D/g, '');
-              window.location.href = `tel:+${phone}`;
-            }}
-            className="flex flex-col items-center justify-center gap-2 bg-card border border-muted text-primary py-5 rounded-[24px] font-headline font-bold text-[9px] uppercase tracking-[0.15em] hover:scale-[1.02] active:scale-95 transition-all"
-          >
-            <Phone className="w-5 h-5" />
-            Call
-          </button>
-          <button 
-            onClick={handleShare}
-            className="flex flex-col items-center justify-center gap-2 bg-card border border-muted text-primary py-5 rounded-[24px] font-headline font-bold text-[9px] uppercase tracking-[0.15em] hover:scale-[1.02] active:scale-95 transition-all"
-          >
-            <Share2 className="w-5 h-5" />
-            Share
-          </button>
         </div>
 
         {/* Social Links Grid */}
@@ -362,6 +466,47 @@ END:VCARD`;
           </div>
         </div>
 
+        {/* Action Buttons */}
+        <div className="grid grid-cols-3 gap-3 mt-10">
+          {showPhone ? (
+            <>
+              <button 
+                onClick={handleSaveContact}
+                disabled={isGeneratingVCard}
+                className="flex flex-col items-center justify-center gap-2 bg-primary text-page py-5 rounded-[24px] font-headline font-bold text-[9px] uppercase tracking-[0.15em] hover:scale-[1.02] active:scale-95 transition-all shadow-xl shadow-primary/20 disabled:opacity-50"
+              >
+                {isGeneratingVCard ? <Loader2 className="w-5 h-5 animate-spin" /> : <UserPlus className="w-5 h-5" />}
+                Save
+              </button>
+              <button 
+                onClick={() => {
+                  const phone = (settings.connect_phone || settings.contact_phone || '+9779847000000').replace(/\D/g, '');
+                  window.location.href = `tel:+${phone}`;
+                }}
+                className="flex flex-col items-center justify-center gap-2 bg-card border border-muted text-primary py-5 rounded-[24px] font-headline font-bold text-[9px] uppercase tracking-[0.15em] hover:scale-[1.02] active:scale-95 transition-all"
+              >
+                <Phone className="w-5 h-5" />
+                Call
+              </button>
+            </>
+          ) : (
+            <button 
+              onClick={() => setShowExchangeModal(true)}
+              className="col-span-2 flex items-center justify-center gap-3 bg-primary text-page py-4 rounded-2xl font-headline font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-primary/90 active:scale-95 transition-all shadow-lg shadow-primary/10"
+            >
+              <UserPlus className="w-4 h-4" />
+              Exchange Contact
+            </button>
+          )}
+          <button 
+            onClick={handleShare}
+            className="flex flex-col items-center justify-center gap-2 bg-card border border-muted text-primary py-5 rounded-[24px] font-headline font-bold text-[9px] uppercase tracking-[0.15em] hover:scale-[1.02] active:scale-95 transition-all"
+          >
+            <Share2 className="w-5 h-5" />
+            Share
+          </button>
+        </div>
+
         {/* Contact Info List */}
         <div className="mt-10 space-y-3">
           <h2 className="font-mono text-[10px] uppercase tracking-[0.2em] text-secondary mb-4 px-2">Contact Details</h2>
@@ -395,14 +540,14 @@ END:VCARD`;
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 z-[100] overflow-y-auto bg-black/60 backdrop-blur-sm p-6 flex justify-center items-start"
             onClick={() => setShowQR(false)}
           >
             <motion.div 
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-page w-full max-w-sm rounded-3xl p-8 text-center relative shadow-2xl"
+              className="bg-page w-full max-w-sm rounded-3xl p-8 text-center relative shadow-2xl my-auto"
               onClick={e => e.stopPropagation()}
             >
               <button 
@@ -421,7 +566,7 @@ END:VCARD`;
               
               <div className="w-full">
                 <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] text-secondary mb-4 text-left px-2">Share via</h3>
-                <div className="flex overflow-x-auto gap-4 pb-4 designer-scrollbar -mx-2 px-2 scroll-smooth">
+                <div className="flex overflow-x-auto gap-4 pb-4 scrollbar-hide -mx-2 px-2 scroll-smooth">
                   {shareOptions.map((option) => (
                     <button
                       key={option.name}
@@ -449,6 +594,96 @@ END:VCARD`;
                   Save QR Image
                 </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Exchange Contact Modal */}
+      <AnimatePresence>
+        {showExchangeModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] overflow-y-auto bg-black/60 backdrop-blur-sm p-6 flex justify-center items-start"
+            onClick={() => setShowExchangeModal(false)}
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-page w-full max-w-sm rounded-3xl p-8 relative shadow-2xl my-auto"
+              onClick={e => e.stopPropagation()}
+            >
+              <button 
+                onClick={() => setShowExchangeModal(false)}
+                className="absolute top-4 right-4 p-2 text-secondary hover:text-accent transition-colors"
+              >
+                <X size={20} />
+              </button>
+              
+              <div className="text-center mb-8">
+                <div className="w-16 h-16 bg-accent/10 rounded-2xl flex items-center justify-center text-accent mx-auto mb-4">
+                  <UserPlus className="w-8 h-8" />
+                </div>
+                <h2 className="text-xl font-bold font-headline text-accent mb-2">Exchange Contact</h2>
+                <p className="text-secondary text-xs">Share your contact details with me.</p>
+              </div>
+
+              <form onSubmit={handleExchangeSubmit} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Your Name</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={exchangeName}
+                    onChange={(e) => setExchangeName(e.target.value)}
+                    placeholder="Full Name"
+                    className="w-full bg-card border border-muted rounded-2xl px-4 py-3 text-sm focus:border-accent outline-none transition-colors"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Email Address</label>
+                  <input 
+                    type="email" 
+                    required
+                    value={exchangeEmail}
+                    onChange={(e) => setExchangeEmail(e.target.value)}
+                    placeholder="example@email.com"
+                    className="w-full bg-card border border-muted rounded-2xl px-4 py-3 text-sm focus:border-accent outline-none transition-colors"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Phone Number</label>
+                  <input 
+                    type="tel" 
+                    required
+                    value={exchangePhone}
+                    onChange={(e) => setExchangePhone(e.target.value)}
+                    placeholder="+1 234 567 890"
+                    className="w-full bg-card border border-muted rounded-2xl px-4 py-3 text-sm focus:border-accent outline-none transition-colors"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Note (Optional)</label>
+                  <textarea 
+                    value={exchangeNote}
+                    onChange={(e) => setExchangeNote(e.target.value)}
+                    placeholder="Add a short note..."
+                    rows={3}
+                    className="w-full bg-card border border-muted rounded-2xl px-4 py-3 text-sm focus:border-accent outline-none transition-colors resize-none"
+                  />
+                </div>
+                <button 
+                  type="submit"
+                  disabled={isExchanging}
+                  className="w-full bg-primary text-page py-4 rounded-2xl font-headline font-bold text-xs uppercase tracking-[0.15em] hover:bg-primary/90 active:scale-95 transition-all shadow-xl shadow-primary/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isExchanging ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  Share Contact
+                </button>
+              </form>
             </motion.div>
           </motion.div>
         )}

@@ -23,7 +23,7 @@ export const PROJECTS_DATA = [
   }
 ];
 
-export const BLOG_DATA = [
+export const DEV_LOGS_DATA = [
   {
     id: 1,
     date: "OCT 24, 2024",

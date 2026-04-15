@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useContent } from './hooks/useContent';
+import SEO from './components/SEO';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -24,6 +25,17 @@ export default function GalleryPage() {
     ? galleryItems 
     : galleryItems.filter(item => item.category === activeCategory);
 
+  React.useEffect(() => {
+    if (selectedImage) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
+    }
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, [selectedImage]);
+
   if (loading) return (
     <div className="min-h-screen bg-page flex items-center justify-center">
       <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
@@ -32,7 +44,12 @@ export default function GalleryPage() {
 
   return (
     <div className="min-h-screen bg-page text-primary p-8">
-      <div className="max-w-7xl mx-auto">
+      <SEO 
+        title="Gallery"
+        description="A collection of memories and visual stories from my journey."
+        url={window.location.href}
+      />
+      <div className="max-w-7xl 2xl:max-w-[1600px] 3xl:max-w-[1800px] mx-auto">
         <div className="relative flex flex-col md:flex-row justify-center items-center mb-16 gap-6">
           <Link to="/" className="md:absolute md:left-0 flex items-center gap-2 text-secondary hover:text-accent transition-colors font-mono text-sm">
             <ArrowLeft className="w-4 h-4" /> Back to Home
@@ -93,11 +110,11 @@ export default function GalleryPage() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4"
+            className="fixed inset-0 z-[100] overflow-y-auto bg-black/90 p-4 flex justify-center items-start"
             onClick={() => setSelectedImage(null)}
           >
             <button 
-              className="absolute top-8 right-8 text-white hover:text-accent transition-colors"
+              className="fixed top-8 right-8 text-white hover:text-accent transition-colors z-[110]"
               onClick={() => setSelectedImage(null)}
             >
               <X className="w-8 h-8" />
@@ -107,7 +124,7 @@ export default function GalleryPage() {
               animate={{ scale: 1 }}
               exit={{ scale: 0.9 }}
               src={selectedImage}
-              className="max-w-full max-h-full object-contain rounded-lg"
+              className="max-w-full max-h-none object-contain rounded-lg my-auto"
               referrerPolicy="no-referrer"
             />
           </motion.div>

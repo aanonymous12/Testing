@@ -7,6 +7,13 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
+    optimizeDeps: {
+      esbuildOptions: {
+        loader: {
+          '.keep': 'text',
+        },
+      },
+    },
     define: {},
     resolve: {
       alias: {

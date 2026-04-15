@@ -2,12 +2,18 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { Home, ArrowLeft, AlertCircle } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import SEO from './SEO';
 
 const NotFound = () => {
   const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-page flex items-center justify-center p-6 text-primary font-body">
+      <SEO 
+        title="404 - Page Not Found"
+        description="The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+        url={window.location.href}
+      />
       <div className="max-w-md w-full text-center">
         <motion.div
           initial={{ scale: 0.8, opacity: 0 }}

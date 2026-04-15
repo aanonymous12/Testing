@@ -1,0 +1,21 @@
+{
+  "name": "Janak Panthi",
+  "short_name": "Janak",
+  "description": "Janak Panthi is an entrepreneur and computer science student at Texas State University.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#da755b",
+  "icons": [
+    {
+      "src": "https://www.janakpanthi.com.np/Resources/images/profile-1.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg"
+    },
+    {
+      "src": "https://www.janakpanthi.com.np/Resources/images/profile-1.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg"
+    }
+  ]
+}

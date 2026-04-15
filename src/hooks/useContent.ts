@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, isConfigured } from '../lib/supabase';
 
 export const useContent = (table: string) => {
   const [data, setData] = useState<any[]>([]);
@@ -9,6 +9,9 @@ export const useContent = (table: string) => {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        if (!isConfigured) {
+          throw new Error('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file.');
+        }
         const { data: result, error: err } = await supabase
           .from(table)
           .select('*')
@@ -34,7 +37,12 @@ export const useSettings = () => {
   const [loading, setLoading] = useState(true);
 
   const fetchSettings = async () => {
-    const { data, error } = await supabase.from('site_settings').select('key, value');
+    // Exclude sensitive keys like passwords from being fetched to the frontend
+    const { data, error } = await supabase
+      .from('site_settings')
+      .select('key, value')
+      .not('key', 'in', '("cv_password", "notepad_password", "admin_password")');
+    
     if (!error && data) {
       const settingsMap = data.reduce((acc: any, item: any) => {
         acc[item.key] = item.value;
@@ -51,7 +59,7 @@ export const useSettings = () => {
 
   const updateSettings = async (newSettings: Record<string, string>) => {
     const updates = Object.entries(newSettings).map(([key, value]) => 
-      supabase.from('site_settings').update({ value }).eq('key', key)
+      supabase.from('site_settings').upsert({ key, value }, { onConflict: 'key' })
     );
     await Promise.all(updates);
     await fetchSettings();
@@ -60,7 +68,7 @@ export const useSettings = () => {
   return { settings, loading, updateSettings };
 };
 
-export const useBlogPosts = () => {
+export const useDevLogs = () => {
   const [posts, setPosts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 

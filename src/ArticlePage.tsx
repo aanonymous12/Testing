@@ -4,11 +4,24 @@ import { motion } from 'motion/react';
 import { ArrowLeft, Calendar, Share2 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import ReactMarkdown from 'react-markdown';
+import { tracking } from './lib/tracking';
+import SEO from './components/SEO';
 
 const ArticlePage = () => {
   const { slug } = useParams<{ slug: string }>();
   const [article, setArticle] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [showCopyNotification, setShowCopyNotification] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(window.location.href);
+    setShowCopyNotification(true);
+    setTimeout(() => setShowCopyNotification(false), 2000);
+  };
+
+  useEffect(() => {
+    tracking.trackPageView();
+  }, [slug]);
 
   useEffect(() => {
     async function fetchArticle() {
@@ -51,8 +64,28 @@ const ArticlePage = () => {
     <motion.div 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="max-w-4xl mx-auto px-8 py-24"
+      className="max-w-4xl 2xl:max-w-5xl 3xl:max-w-6xl mx-auto px-8 py-24"
     >
+      <SEO 
+        title={article.title}
+        description={article.excerpt}
+        image={article.image_url}
+        url={window.location.href}
+        type="article"
+      />
+
+      {/* Copy Notification */}
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: showCopyNotification ? 1 : 0, y: showCopyNotification ? 0 : -20 }}
+        className="fixed top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none"
+      >
+        <div className="bg-accent text-page px-6 py-3 rounded-full shadow-2xl font-mono text-[10px] uppercase tracking-widest flex items-center gap-2">
+          <Share2 className="w-3 h-3" />
+          Link copied to clipboard!
+        </div>
+      </motion.div>
+
       <Link 
         to="/" 
         className="inline-flex items-center gap-2 text-secondary hover:text-accent transition-colors mb-12 font-mono text-xs uppercase tracking-widest"
@@ -88,7 +121,20 @@ const ArticlePage = () => {
               <p className="text-xs text-secondary">Founder & Developer</p>
             </div>
           </div>
-          <button className="p-2 hover:bg-muted rounded-full transition-colors text-secondary">
+          <button 
+            onClick={() => {
+              if (navigator.share) {
+                navigator.share({
+                  title: article.title,
+                  text: article.excerpt,
+                  url: window.location.href,
+                }).catch(console.error);
+              } else {
+                handleCopy();
+              }
+            }}
+            className="p-2 hover:bg-muted rounded-full transition-colors text-secondary"
+          >
             <Share2 className="w-5 h-5" />
           </button>
         </div>
