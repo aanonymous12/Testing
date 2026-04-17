@@ -110,7 +110,7 @@ const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
+    fileSize: 50 * 1024 * 1024, // 50MB limit
   },
   fileFilter: (req, file, cb) => {
     // Allow only common image and document types
@@ -122,13 +122,18 @@ const upload = multer({
       'image/svg+xml',
       'application/pdf',
       'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'video/mp4',
+      'video/mpeg',
+      'video/quicktime',
+      'video/webm',
+      'video/x-msvideo'
     ];
     
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only images and documents are allowed.'));
+      cb(new Error('Invalid file type. Only images, documents, and videos are allowed.'));
     }
   }
 });
@@ -172,7 +177,8 @@ const app = express();
 // Trust proxy if behind a reverse proxy (like Cloud Run/Nginx/Vercel)
 app.set('trust proxy', 1);
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Health check
 app.get("/api/health", (req, res) => {
@@ -196,7 +202,7 @@ app.post("/api/v1/upload", uploadLimiter, (req, res, next) => {
     if (err instanceof multer.MulterError) {
       console.error("Multer error:", err);
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: "File too large. Max size is 5MB." });
+        return res.status(400).json({ error: "File too large. Max size is 50MB." });
       }
       return res.status(400).json({ error: err.message });
     } else if (err) {
@@ -246,7 +252,7 @@ app.post("/api/v1/upload", uploadLimiter, (req, res, next) => {
 // API routes
 app.post("/api/v1/notify", contactLimiter, async (req, res) => {
     const { type, data: rawData } = req.body;
-    const recipient = process.env.ADMIN_EMAIL || "prankytv736@gmail.com";
+    const recipient = process.env.ADMIN_EMAIL || "admin@janakpanthi.com";
 
     // Validate and sanitize data based on type
     let validatedData: any = rawData;
@@ -840,7 +846,7 @@ app.post("/api/v1/notify", contactLimiter, async (req, res) => {
 VERSION:3.0
 FN:Janak Panthi
 TEL;TYPE=CELL:${data.adminPhone || '+977 98XXXXXXXX'}
-EMAIL:${data.adminEmail || 'hello@janakpanthi.com'}
+EMAIL:${data.adminEmail || 'admin@janakpanthi.com'}
 URL:https://janakpanthi.com.np
 END:VCARD`;
 
@@ -1087,6 +1093,14 @@ END:VCARD`;
       const errorMessage = error.response?.data?.error?.message || error.message || "Failed to fetch Search Console data";
       res.status(500).json({ error: errorMessage });
     }
+  });
+
+  // API 404 handler - Catch any unmatched /api routes and return JSON
+  app.use('/api/*', (req, res) => {
+    res.status(404).json({ 
+      error: "Not Found", 
+      message: `API route not found: ${req.method} ${req.originalUrl}` 
+    });
   });
 
   // Global error handler

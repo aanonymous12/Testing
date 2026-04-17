@@ -429,21 +429,58 @@ const Admin = () => {
                   </div>
                 </div>
               )}
-              {activeTab === 'projects' && <TableEditor table="projects" fields={['title', 'short_description', 'long_description', 'image_url', 'video_url', 'live_url', 'source_url', 'type', 'features_title', 'features']} showNotification={showNotification} label="Project" />}
+              {activeTab === 'projects' && (
+                <div className="space-y-6">
+                  <SectionBrandingEditor section="projects" label="Projects" showNotification={showNotification} />
+                  <TableEditor table="projects" fields={['title', 'short_description', 'long_description', 'image_url', 'video_url', 'live_url', 'source_url', 'type', 'features_title', 'features']} showNotification={showNotification} label="Project" />
+                </div>
+              )}
               {activeTab === 'tools' && <ToolsManager showNotification={showNotification} />}
               {activeTab === 'skills' && (
                 <div className="space-y-12">
+                  <SectionBrandingEditor section="skills" label="Skills" showNotification={showNotification} />
                   <TableEditor table="skill_tags" fields={['name', 'order_index']} showNotification={showNotification} label="Tag" />
                   <div className="pt-12 border-t border-muted">
                     <TableEditor table="skills" fields={['name', 'icon', 'category', 'order_index']} showNotification={showNotification} label="Skill" />
                   </div>
                 </div>
               )}
-              {activeTab === 'awards' && <TableEditor table="awards" fields={['title', 'organization', 'year', 'description']} showNotification={showNotification} label="Award" />}
-              {activeTab === 'teams' && <TableEditor table="teams" fields={['name', 'role', 'image_url']} showNotification={showNotification} label="Member" />}
-              {activeTab === 'gallery' && <GalleryManager showNotification={showNotification} />}
+              {activeTab === 'awards' && (
+                <div className="space-y-6">
+                  <SectionBrandingEditor section="awards" label="Awards" showNotification={showNotification} />
+                  <TableEditor table="awards" fields={['title', 'organization', 'year', 'description']} showNotification={showNotification} label="Award" />
+                </div>
+              )}
+              {activeTab === 'teams' && (
+                <div className="space-y-6">
+                  <div className="bg-alt border border-muted rounded-2xl p-6 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="p-3 bg-accent/10 text-accent rounded-xl">
+                        <Users size={24} />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold">Team Visibility</h3>
+                        <p className="text-sm text-secondary/60">Show or hide the team section on your portfolio</p>
+                      </div>
+                    </div>
+                    <TeamsToggle showNotification={showNotification} />
+                  </div>
+                  <TableEditor table="teams" fields={['name', 'role', 'image_url']} showNotification={showNotification} label="Member" />
+                </div>
+              )}
+              {activeTab === 'gallery' && (
+                <div className="space-y-6">
+                  <SectionBrandingEditor section="gallery" label="Gallery" showNotification={showNotification} />
+                  <GalleryManager showNotification={showNotification} />
+                </div>
+              )}
               {activeTab === 'hero_about' && <HeroAboutEditor showNotification={showNotification} />}
-              {activeTab === 'devlogs' && <DevLogManager showNotification={showNotification} />}
+              {activeTab === 'devlogs' && (
+                 <div className="space-y-6">
+                   <SectionBrandingEditor section="devlogs" label="Dev Logs" showNotification={showNotification} />
+                   <DevLogManager showNotification={showNotification} />
+                 </div>
+              )}
               {activeTab === 'cv' && <CVManager onRefresh={fetchUnreadCounts} showNotification={showNotification} />}
               {activeTab === 'social' && <SocialLinksEditor showNotification={showNotification} />}
               {activeTab === 'connect' && <ConnectWithMeEditor onRefresh={fetchUnreadCounts} showNotification={showNotification} />}
@@ -1167,6 +1204,7 @@ const HeroAboutEditor = ({ showNotification }: any) => {
         hero_image: settings.hero_image || '',
         about_description: settings.about_description || '',
         about_image: settings.about_image || '',
+        branding_about_styled: settings.branding_about_styled || '',
       };
       setLocalSettings(initial);
       setOriginalSettings(initial);
@@ -1279,9 +1317,72 @@ const HeroAboutEditor = ({ showNotification }: any) => {
                   showNotification={showNotification}
                 />
               </div>
+              <div className="space-y-2">
+                <label className="text-xs font-mono uppercase tracking-wider text-secondary/60">About Section Styled Word</label>
+                <input
+                  type="text"
+                  value={localSettings.branding_about_styled || ''}
+                  onChange={(e) => setLocalSettings({ ...localSettings, branding_about_styled: e.target.value })}
+                  placeholder="e.g. Lifestyle"
+                  className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors"
+                />
+              </div>
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+const SectionBrandingEditor = ({ section, label = section, showNotification }: { section: string, label?: string, showNotification: any }) => {
+  const { settings, updateSettings } = useSettings();
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setValue(settings[`branding_${section}_styled`] || '');
+    }
+  }, [settings, section]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateSettings({ [`branding_${section}_styled`]: value });
+      showNotification(`${label} branding updated`);
+    } catch (err: any) {
+      showNotification('Failed to update branding: ' + err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasChanges = value !== (settings?.[`branding_${section}_styled`] || '');
+
+  return (
+    <div className="bg-alt border border-muted rounded-2xl p-6 mb-8">
+      <div className="flex flex-col sm:flex-row items-end gap-4">
+        <div className="flex-1 w-full">
+          <label className="text-xs font-mono uppercase tracking-wider text-secondary/60 block mb-2">
+            {label} Section - Styled Heading Word
+          </label>
+          <input 
+            type="text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors"
+            placeholder="e.g. Works, Honors, Visuals..."
+          />
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={saving || !hasChanges}
+          className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] hover:scale-[1.02] transition-all disabled:opacity-50 shrink-0 whitespace-nowrap flex items-center justify-center gap-2"
+        >
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          <span>Save Branding</span>
+        </button>
       </div>
     </div>
   );
@@ -1302,15 +1403,23 @@ const SettingsEditor = ({ showNotification }: any) => {
       fields: [
         { key: 'site_title', label: 'Site Title', type: 'text' },
         { key: 'site_tagline', label: 'Site Tagline', type: 'text' },
+        { key: 'footer_copyright_name', label: 'Footer Copyright Name', type: 'text' },
         { key: 'default_language', label: 'Default Language', type: 'select', options: ['English', 'Nepali', 'Spanish', 'French', 'German', 'Japanese'] },
-        { 
-          key: 'timezone', 
-          label: 'Timezone', 
-          type: 'select', 
-          options: [
-            'UTC', 'Asia/Kathmandu', 'Asia/Tokyo', 'Europe/London', 'America/New_York', 'America/Los_Angeles'
-          ] 
-        },
+      ]
+    },
+    {
+      id: 'navigation',
+      label: 'Navigation',
+      icon: <Menu size={18} />,
+      fields: [
+        { key: 'nav_label_home', label: 'Home Link Label', type: 'text' },
+        { key: 'nav_label_about', label: 'About Link Label', type: 'text' },
+        { key: 'nav_label_projects', label: 'Projects Link Label', type: 'text' },
+        { key: 'nav_label_skills', label: 'Skills Link Label', type: 'text' },
+        { key: 'nav_label_awards', label: 'Awards Link Label', type: 'text' },
+        { key: 'nav_label_gallery', label: 'Gallery Link Label', type: 'text' },
+        { key: 'nav_label_devlogs', label: 'Dev Logs Link Label', type: 'text' },
+        { key: 'nav_label_contact', label: 'Contact Link Label', type: 'text' },
       ]
     },
     {
@@ -1354,8 +1463,16 @@ const SettingsEditor = ({ showNotification }: any) => {
         { key: 'meta_title', label: 'Meta Title (Default)', type: 'text' },
         { key: 'meta_description', label: 'Meta Description', type: 'textarea' },
         { key: 'meta_keywords', label: 'Keywords (Comma separated)', type: 'text' },
+        { key: 'seo_wikidata_id', label: 'Wikidata ID URL', type: 'text' },
+        { key: 'seo_nationality', label: 'Nationality (SEO)', type: 'text' },
+        { key: 'seo_location_name', label: 'Home Location (SEO)', type: 'text' },
+        { key: 'seo_job_title', label: 'Job Title (SEO)', type: 'text' },
+        { key: 'seo_org_name', label: 'Main Organization (SEO)', type: 'text' },
+        { key: 'seo_alumni_name', label: 'Alumni Organization (SEO)', type: 'text' },
         { key: 'og_image', label: 'Social Share Image (OG)', type: 'image' },
         { key: 'favicon_url', label: 'Favicon / Site Icon', type: 'image' },
+        { key: 'apple_icon_180', label: 'Apple Touch Icon (180x180)', type: 'image' },
+        { key: 'pwa_icon_512', label: 'PWA Icon (512x512)', type: 'image' },
         { key: 'allow_indexing', label: 'Search Engine Indexing', type: 'toggle' },
       ]
     },
@@ -1391,6 +1508,14 @@ const SettingsEditor = ({ showNotification }: any) => {
       icon: <Cpu size={18} />,
       fields: [
         { key: 'maintenance_mode', label: 'Maintenance Mode', type: 'toggle' },
+      ]
+    },
+    {
+      id: 'sections',
+      label: 'Page Sections',
+      icon: <ListTodo size={18} />,
+      fields: [
+        { key: 'enable_teams_section', label: 'Enable Teams Section', type: 'toggle' },
       ]
     }
   ];
@@ -1450,7 +1575,7 @@ const SettingsEditor = ({ showNotification }: any) => {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="flex items-center gap-2 bg-accent text-page px-6 py-3 rounded-xl font-bold text-sm hover:scale-[1.02] transition-all disabled:opacity-50 shadow-lg shadow-accent/20"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] hover:scale-[1.02] transition-all disabled:opacity-50 shadow-lg shadow-accent/20"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             Save All Changes
@@ -1466,14 +1591,16 @@ const SettingsEditor = ({ showNotification }: any) => {
               key={cat.id}
               onClick={() => setActiveCategory(cat.id)}
               className={cn(
-                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-sm font-medium",
+                "w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all text-sm font-medium",
                 activeCategory === cat.id 
                   ? "bg-accent text-page shadow-lg shadow-accent/20" 
                   : "text-secondary/60 hover:bg-alt hover:text-secondary"
               )}
             >
-              {cat.icon}
-              {cat.label}
+              <div className="flex items-center gap-3">
+                {cat.icon}
+                {cat.label}
+              </div>
             </button>
           ))}
         </div>
@@ -1593,6 +1720,92 @@ const SettingsEditor = ({ showNotification }: any) => {
   );
 };
 
+const FileUpload = ({ value, onChange, accept = "*/*", showNotification }: { value: string, onChange: (val: string) => void, accept?: string, showNotification: any }) => {
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    try {
+      // Client-side validation
+      const allowedMimes = [
+        'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+        'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'video/mp4', 'video/mpeg', 'video/quicktime', 'video/webm', 'video/x-msvideo'
+      ];
+      
+      if (!allowedMimes.includes(file.type) && accept !== "*/*") {
+        // Only strict check if not allowing all types
+        const isImage = file.type.startsWith('image/');
+        const isVideo = file.type.startsWith('video/');
+        const isDoc = file.type === 'application/pdf' || file.type.includes('word');
+        if (!isImage && !isVideo && !isDoc) {
+          throw new Error('Invalid file type. Only images, documents, and videos are allowed.');
+        }
+      }
+
+      if (file.size > 50 * 1024 * 1024) {
+        throw new Error('File too large. Max size is 50MB.');
+      }
+
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `public/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('images')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('images')
+        .getPublicUrl(filePath);
+
+      onChange(publicUrl);
+    } catch (error: any) {
+      showNotification('Error uploading file: ' + error.message, 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row gap-3">
+        <input 
+          type="text"
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="File URL"
+          className="flex-1 bg-page border border-muted rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors min-w-0"
+        />
+        <button 
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          className="bg-alt border border-muted text-secondary px-4 py-3 rounded-xl hover:bg-page transition-colors flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap"
+        >
+          {uploading ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+          Upload File
+        </button>
+        <input 
+          type="file"
+          ref={fileInputRef}
+          onChange={handleUpload}
+          accept={accept}
+          className="hidden"
+        />
+      </div>
+    </div>
+  );
+};
+
 const ImageUpload = ({ value, onChange, showNotification }: { value: string, onChange: (val: string) => void, showNotification: any }) => {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1603,18 +1816,33 @@ const ImageUpload = ({ value, onChange, showNotification }: { value: string, onC
 
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
+      // Client-side validation
+      if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+        throw new Error('Invalid file type. Only images and videos are allowed.');
+      }
 
-      const response = await fetch('/api/v1/upload', {
-        method: 'POST',
-        body: formData
-      });
+      if (file.size > 50 * 1024 * 1024) {
+        throw new Error('File too large. Max size is 50MB.');
+      }
 
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Upload failed');
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `public/${fileName}`;
 
-      onChange(result.url);
+      const { error: uploadError } = await supabase.storage
+        .from('images')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('images')
+        .getPublicUrl(filePath);
+
+      onChange(publicUrl);
     } catch (error: any) {
       showNotification('Error uploading image: ' + error.message, 'error');
     } finally {
@@ -1627,7 +1855,7 @@ const ImageUpload = ({ value, onChange, showNotification }: { value: string, onC
       <div className="flex flex-col sm:flex-row gap-3">
         <input 
           type="text"
-          value={value}
+          value={value || ''}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Image URL"
           className="flex-1 bg-page border border-muted rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors min-w-0"
@@ -1654,6 +1882,37 @@ const ImageUpload = ({ value, onChange, showNotification }: { value: string, onC
         </div>
       )}
     </div>
+  );
+};
+
+const TeamsToggle = ({ showNotification }: any) => {
+  const { settings, updateSettings } = useSettings();
+  const isEnabled = settings.enable_teams_section === 'true';
+
+  const handleToggle = async () => {
+    try {
+      await updateSettings({ enable_teams_section: (!isEnabled).toString() });
+      showNotification(`Team section ${!isEnabled ? 'enabled' : 'disabled'} successfully!`);
+    } catch (err) {
+      showNotification('Failed to update team section visibility', 'error');
+    }
+  };
+
+  return (
+    <button
+      onClick={handleToggle}
+      className={cn(
+        "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
+        isEnabled ? "bg-accent" : "bg-muted"
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-4 w-4 transform rounded-full bg-page transition-transform",
+          isEnabled ? "translate-x-6" : "translate-x-1"
+        )}
+      />
+    </button>
   );
 };
 
@@ -1745,22 +2004,22 @@ const TableEditor = ({ table, fields, showNotification, label }: any) => {
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-3xl font-bold capitalize">{table.replace(/_/g, ' ')}</h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
           {hasChanges && (
             <button 
               onClick={handleSaveAll}
               disabled={saving}
-              className="bg-accent text-page px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:scale-105 transition-transform disabled:opacity-50"
+              className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 hover:scale-105 transition-transform disabled:opacity-50"
             >
-              {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
               Save All Changes
             </button>
           )}
           <button 
             onClick={handleAdd}
-            className="w-full sm:w-auto bg-accent text-page px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group"
+            className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group"
           >
-            <Plus size={18} className="group-hover:rotate-90 transition-transform" />
+            <Plus size={16} className="group-hover:rotate-90 transition-transform" />
             Add New {label || ''}
           </button>
         </div>
@@ -1783,6 +2042,7 @@ const TableEditor = ({ table, fields, showNotification, label }: any) => {
                     <FeaturesEditor 
                       value={item[f]} 
                       onChange={(val) => handleFieldChange(item.id, f, val)} 
+                      showNotification={showNotification}
                     />
                   ) : f.includes('video') ? (
                     <FileUpload 
@@ -1821,7 +2081,7 @@ const TableEditor = ({ table, fields, showNotification, label }: any) => {
   );
 };
 
-const FeaturesEditor = ({ value, onChange }: { value: any, onChange: (val: any) => void }) => {
+const FeaturesEditor = ({ value, onChange, showNotification }: { value: any, onChange: (val: any) => void, showNotification: any }) => {
   const features = value ? (typeof value === 'string' ? JSON.parse(value) : value) : [];
 
   const handleFeatureChange = (index: number, field: string, val: string) => {
@@ -1843,11 +2103,11 @@ const FeaturesEditor = ({ value, onChange }: { value: any, onChange: (val: any) 
   return (
     <div className="space-y-4 border border-muted p-4 rounded-xl bg-page/30">
       {features.map((feature: any, idx: number) => (
-        <div key={idx} className="p-4 bg-alt rounded-lg border border-muted relative space-y-3">
+        <div key={idx} className="p-6 bg-alt rounded-lg border border-muted relative space-y-4">
           <button 
             type="button"
             onClick={() => removeFeature(idx)}
-            className="absolute top-2 right-2 text-red-500/50 hover:text-red-500"
+            className="absolute top-2 right-2 text-red-500/50 hover:text-red-500 transition-colors"
           >
             <Trash2 size={14} />
           </button>
@@ -1856,7 +2116,7 @@ const FeaturesEditor = ({ value, onChange }: { value: any, onChange: (val: any) 
             placeholder="Feature Title"
             value={feature.title || ''}
             onChange={(e) => handleFeatureChange(idx, 'title', e.target.value)}
-            className="w-full bg-page border border-muted rounded-lg px-3 py-2 text-sm outline-none focus:border-primary transition-colors"
+            className="w-full bg-page border border-muted rounded-lg px-3 py-2 text-sm outline-none focus:border-primary transition-colors pr-10"
           />
           <AutoExpandingTextarea 
             placeholder="Feature Description"
@@ -1864,25 +2124,22 @@ const FeaturesEditor = ({ value, onChange }: { value: any, onChange: (val: any) 
             onChange={(e: any) => handleFeatureChange(idx, 'description', e.target.value)}
             className="w-full bg-page border border-muted rounded-lg px-3 py-2 text-sm outline-none focus:border-primary min-h-[100px] transition-colors"
           />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-3">
             <div className="space-y-1">
-              <label className="text-[10px] uppercase font-mono text-secondary/50 ml-1">Video URL</label>
-              <input 
-                type="text"
-                placeholder="Video URL"
-                value={feature.video_url || ''}
-                onChange={(e) => handleFeatureChange(idx, 'video_url', e.target.value)}
-                className="w-full bg-page border border-muted rounded-lg px-3 py-2 text-xs outline-none focus:border-primary transition-colors"
+              <label className="text-[10px] uppercase font-mono text-secondary/50 ml-1">Video URL / Upload</label>
+              <FileUpload 
+                value={feature.video_url || ''} 
+                onChange={(val) => handleFeatureChange(idx, 'video_url', val)} 
+                accept="video/*"
+                showNotification={showNotification}
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] uppercase font-mono text-secondary/50 ml-1">Image URL (fallback)</label>
-              <input 
-                type="text"
-                placeholder="Image URL"
-                value={feature.image_url || ''}
-                onChange={(e) => handleFeatureChange(idx, 'image_url', e.target.value)}
-                className="w-full bg-page border border-muted rounded-lg px-3 py-2 text-xs outline-none focus:border-primary transition-colors"
+              <label className="text-[10px] uppercase font-mono text-secondary/50 ml-1">Image URL (fallback) / Upload</label>
+              <ImageUpload 
+                value={feature.image_url || ''} 
+                onChange={(val) => handleFeatureChange(idx, 'image_url', val)} 
+                showNotification={showNotification}
               />
             </div>
           </div>
@@ -1895,65 +2152,6 @@ const FeaturesEditor = ({ value, onChange }: { value: any, onChange: (val: any) 
       >
         <Plus size={14} /> Add Feature
       </button>
-    </div>
-  );
-};
-
-const FileUpload = ({ value, onChange, accept = "*/*", showNotification }: { value: string, onChange: (val: string) => void, accept?: string, showNotification: any }) => {
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const response = await fetch('/api/v1/upload', {
-        method: 'POST',
-        body: formData
-      });
-
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Upload failed');
-
-      onChange(result.url);
-    } catch (error: any) {
-      showNotification('Error uploading file: ' + error.message, 'error');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row gap-3">
-        <input 
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="File URL"
-          className="flex-1 bg-page border border-muted rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors min-w-0"
-        />
-        <button 
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-          className="bg-alt border border-muted text-secondary px-4 py-3 rounded-xl hover:bg-page transition-colors flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap"
-        >
-          {uploading ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-          Upload File
-        </button>
-        <input 
-          type="file"
-          ref={fileInputRef}
-          onChange={handleUpload}
-          accept={accept}
-          className="hidden"
-        />
-      </div>
     </div>
   );
 };
@@ -2087,15 +2285,14 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
   return (
     <div className="space-y-12">
       <section className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <h2 className="text-3xl font-bold">CV Configuration</h2>
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
           {hasChanges && (
             <button 
               onClick={handleSaveSettings}
               disabled={saving}
-              className="bg-accent text-page px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:scale-105 transition-transform disabled:opacity-50"
+              className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 hover:scale-105 transition-transform disabled:opacity-50"
             >
-              {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
               Save All Changes
             </button>
           )}
@@ -2108,7 +2305,7 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
                 {s.key === 'cv_url' ? (
                   <div className="space-y-4">
                     <FileUpload 
-                      value={s.value}
+                      value={s.value || ''}
                       onChange={(val) => handleValueChange(s.id, val)}
                       accept=".pdf,.doc,.docx"
                       showNotification={showNotification}
@@ -2119,7 +2316,7 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
                     <div className="relative">
                       <input 
                         type={!showPassword ? "password" : "text"}
-                        value={s.value}
+                        value={s.value || ''}
                         onChange={(e) => handleValueChange(s.id, e.target.value)}
                         className="w-full bg-page border border-muted rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors pr-12"
                         placeholder="Set CV Access Password"
@@ -3303,22 +3500,22 @@ const DevLogManager = ({ showNotification }: any) => {
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-3xl font-bold">Dev Logs</h2>
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
           {hasChanges && (
             <button 
               onClick={handleSaveAll}
               disabled={saving}
-              className="bg-accent text-page px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:scale-105 transition-transform disabled:opacity-50 text-sm sm:text-base"
+              className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 hover:scale-105 transition-transform disabled:opacity-50"
             >
-              {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
               Save All Changes
             </button>
           )}
           <button 
             onClick={handleAdd}
-            className="bg-accent text-page px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group"
+            className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group"
           >
-            <Plus size={18} className="group-hover:rotate-90 transition-transform" />
+            <Plus size={16} className="group-hover:rotate-90 transition-transform" />
             Add New Log
           </button>
         </div>
@@ -3511,22 +3708,22 @@ const GalleryManager = ({ showNotification }: any) => {
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-3xl font-bold">Gallery Items</h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
           {hasChanges && (
             <button 
               onClick={handleSaveAll}
               disabled={saving}
-              className="bg-accent text-page px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:scale-105 transition-transform disabled:opacity-50"
+              className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 hover:scale-105 transition-transform disabled:opacity-50"
             >
-              {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
               Save All Changes
             </button>
           )}
           <button 
             onClick={handleAdd}
-            className="w-full sm:w-auto bg-accent text-page px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group"
+            className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group"
           >
-            <Plus size={18} className="group-hover:rotate-90 transition-transform" />
+            <Plus size={16} className="group-hover:rotate-90 transition-transform" />
             Add New Image
           </button>
         </div>
@@ -3704,12 +3901,12 @@ const ConnectWithMeEditor = ({ showNotification, onRefresh }: any) => {
             </div>
           ))}
         </div>
-        <div className="mt-8 flex justify-end">
+        <div className="mt-8 flex justify-end w-full sm:w-auto">
           {hasChanges && (
             <button
               onClick={handleSave}
               disabled={saving}
-              className="flex items-center gap-2 bg-accent text-page px-6 py-3 rounded-xl font-bold text-sm hover:scale-[1.02] transition-all disabled:opacity-50"
+              className="w-full sm:w-auto flex items-center justify-center gap-2 bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] hover:scale-[1.02] transition-all disabled:opacity-50"
             >
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save All Changes
@@ -4002,22 +4199,22 @@ const SocialLinksEditor = ({ category = 'main', showNotification }: { category?:
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-3xl font-bold capitalize">{category} Social Links</h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
           {hasChanges && (
             <button 
               onClick={handleSaveAll}
               disabled={saving}
-              className="bg-accent text-page px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:scale-105 transition-transform disabled:opacity-50"
+              className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 hover:scale-105 transition-transform disabled:opacity-50"
             >
-              {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
               Save All Changes
             </button>
           )}
           <button 
             onClick={handleAdd}
-            className="w-full sm:w-auto bg-accent text-page px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group"
+            className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group"
           >
-            <Plus size={18} className="group-hover:rotate-90 transition-transform" />
+            <Plus size={16} className="group-hover:rotate-90 transition-transform" />
             Add New Link
           </button>
         </div>

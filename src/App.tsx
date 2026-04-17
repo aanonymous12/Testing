@@ -20,6 +20,7 @@ import Admin from './Admin';
 import NotFound from './components/NotFound';
 import { PROJECTS_DATA, DEV_LOGS_DATA } from './data';
 import { useContent, useSettings, useSocialLinks, useDevLogs } from './hooks/useContent';
+import { usePWA } from './hooks/usePWA';
 import * as LucideIcons from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { clsx, type ClassValue } from 'clsx';
@@ -58,16 +59,18 @@ const Navbar = ({ isDark, toggleDarkMode }: { isDark: boolean; toggleDarkMode: (
     }
   };
 
+  const isTeamsEnabled = settings.enable_teams_section === 'true';
+
   const navLinks = [
-    { name: 'Home', href: isHomePage ? '#home' : '/' },
-    { name: 'About', href: isHomePage ? '#about' : '/#about' },
-    { name: 'Projects', href: isHomePage ? '#projects' : '/#projects' },
-    { name: 'Skills', href: isHomePage ? '#skills' : '/#skills' },
-    { name: 'Awards', href: isHomePage ? '#awards' : '/#awards' },
-    { name: 'Teams', href: isHomePage ? '#teams' : '/#teams' },
-    { name: 'Gallery', href: isHomePage ? '#gallery' : '/#gallery' },
-    { name: 'Dev Logs', href: isHomePage ? '#devlogs' : '/#devlogs' },
-    { name: 'Contact', href: isHomePage ? '#contact' : '/#contact' },
+    { name: settings.nav_label_home || 'Home', href: isHomePage ? '#home' : '/' },
+    { name: settings.nav_label_about || 'About', href: isHomePage ? '#about' : '/#about' },
+    { name: settings.nav_label_projects || 'Projects', href: isHomePage ? '#projects' : '/#projects' },
+    { name: settings.nav_label_skills || 'Skills', href: isHomePage ? '#skills' : '/#skills' },
+    { name: settings.nav_label_awards || 'Awards', href: isHomePage ? '#awards' : '/#awards' },
+    ...(isTeamsEnabled ? [{ name: 'Teams', href: isHomePage ? '#teams' : '/#teams' }] : []),
+    { name: settings.nav_label_gallery || 'Gallery', href: isHomePage ? '#gallery' : '/#gallery' },
+    { name: settings.nav_label_devlogs || 'Dev Logs', href: isHomePage ? '#devlogs' : '/#devlogs' },
+    { name: settings.nav_label_contact || 'Contact', href: isHomePage ? '#contact' : '/#contact' },
   ];
 
   return (
@@ -569,7 +572,7 @@ const About = () => {
         viewport={{ once: true }}
       >
         <p className="font-mono text-accent uppercase tracking-[0.1em] text-xs mb-4">About me</p>
-        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">Who am I <span className="terracotta-italic">Lifestyle</span></h2>
+        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">Who am I <span className="terracotta-italic">{settings.branding_about_styled || "Lifestyle"}</span></h2>
         <p className="text-secondary leading-relaxed mb-10 text-lg 2xl:text-xl">
           {settings.about_description || "I am a professional from Butwal, Nepal, currently pursuing a Bachelor’s Degree in Computer Science at Texas State University. I am dedicated to continuously expanding my technical expertise and staying current with the latest industry trends. Driven by optimism and determination, I work on improving my communication and design skills to overcome challenges. Through my entrepreneurial ventures and creative work, I strive to make a meaningful impact on my community and share positive energy with those around me."}
         </p>
@@ -876,6 +879,7 @@ const ProjectModal = ({ project, onClose }: any) => {
 };
 
 const Projects = () => {
+  const { settings } = useSettings();
   const [selectedProject, setSelectedProject] = useState<any>(null);
   const { data: projects, loading } = useContent('projects');
 
@@ -885,7 +889,7 @@ const Projects = () => {
     <section id="projects" className="py-24">
       <div className="mb-16">
         <p className="font-mono text-accent uppercase tracking-[0.1em] text-xs mb-4">My project</p>
-        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">Some majors <span className="terracotta-italic">Works</span></h2>
+        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">Some majors <span className="terracotta-italic">{settings.branding_projects_styled || "Works"}</span></h2>
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8 items-stretch">
@@ -911,6 +915,7 @@ const Projects = () => {
 };
 
 const Skills = () => {
+  const { settings } = useSettings();
   const { data: skills, loading: skillsLoading } = useContent('skills');
   const { data: tags, loading: tagsLoading } = useContent('skill_tags');
 
@@ -937,7 +942,7 @@ const Skills = () => {
       <div className="max-w-7xl 2xl:max-w-[1600px] 3xl:max-w-[1800px] mx-auto">
         <div className="mb-24">
           <p className="font-mono text-accent uppercase tracking-[0.2em] text-[10px] mb-6">Expertise & Capabilities</p>
-          <h2 className="text-5xl md:text-6xl 2xl:text-7xl font-bold mb-10 tracking-tight">What I know <span className="terracotta-italic">Craft</span></h2>
+          <h2 className="text-5xl md:text-6xl 2xl:text-7xl font-bold mb-10 tracking-tight">What I know <span className="terracotta-italic">{settings.branding_skills_styled || "Craft"}</span></h2>
           <div className="flex flex-wrap gap-3">
             {tags.map(tag => (
               <span key={tag.id} className="bg-page/50 backdrop-blur-sm px-5 py-2 rounded-full font-mono text-[9px] uppercase tracking-widest border border-muted/50 text-secondary/80">
@@ -1019,6 +1024,7 @@ const Skills = () => {
 };
 
 const Awards = () => {
+  const { settings } = useSettings();
   const { data: awards, loading } = useContent('awards');
 
   if (loading) return null;
@@ -1027,7 +1033,7 @@ const Awards = () => {
     <section id="awards" className="py-24">
       <div className="mb-16">
         <p className="font-mono text-accent uppercase tracking-[0.1em] text-xs mb-4">Recognition</p>
-        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">Awards & <span className="terracotta-italic">Honors</span></h2>
+        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">Awards & <span className="terracotta-italic">{settings.branding_awards_styled || "Honors"}</span></h2>
       </div>
 
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-x-16 gap-y-12">
@@ -1109,7 +1115,7 @@ const Gallery = () => {
     <section id="gallery" className="py-24">
       <div className="mb-16">
         <p className="font-mono text-accent uppercase tracking-[0.1em] text-xs mb-4">Galleries</p>
-        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">My memories <span className="terracotta-italic">Visuals</span></h2>
+        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">My memories <span className="terracotta-italic">{settings.branding_gallery_styled || "Visuals"}</span></h2>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 auto-rows-[250px] mb-12">
@@ -1150,7 +1156,7 @@ const DevLogs = () => {
     <section id="devlogs" className="py-24">
       <div className="mb-16">
         <p className="font-mono text-accent uppercase tracking-[0.1em] text-xs mb-4">Dev Logs</p>
-        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">Content <span className="terracotta-italic">Stories</span></h2>
+        <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">Content <span className="terracotta-italic">{settings.branding_devlogs_styled || "Stories"}</span></h2>
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-12 mb-12">
@@ -1377,22 +1383,33 @@ const Contact = () => {
   );
 };
 
-const Footer = () => (
-  <footer className="bg-alt w-full py-12 px-4 md:px-8 mt-24 border-t border-muted">
-    <div className="max-w-7xl 2xl:max-w-[1600px] 3xl:max-w-[1800px] mx-auto flex justify-center items-center text-center">
-      <p className="text-secondary/60 text-[10px] sm:text-xs font-mono flex flex-wrap justify-center items-center gap-x-2 gap-y-1">
-        <a href="https://janakpanthi.com.np" target="_blank" rel="noopener noreferrer" className="text-[#da755b] hover:underline whitespace-nowrap">Janak Panthi</a> 
-        <span className="hidden sm:inline">|</span> 
-        <span className="whitespace-nowrap">© {new Date().getFullYear()} All rights reserved.</span>
-      </p>
-    </div>
-  </footer>
-);
+const Footer = () => {
+  const { settings } = useSettings();
+  return (
+    <footer className="bg-alt w-full py-12 px-4 md:px-8 mt-24 border-t border-muted">
+      <div className="max-w-7xl 2xl:max-w-[1600px] 3xl:max-w-[1800px] mx-auto flex justify-center items-center text-center">
+        <p className="text-secondary/60 text-[10px] sm:text-xs font-mono flex flex-wrap justify-center items-center gap-x-2 gap-y-1">
+          <a href="https://janakpanthi.com.np" target="_blank" rel="noopener noreferrer" className="text-[#da755b] hover:underline whitespace-nowrap">
+            {settings.footer_copyright_name || settings.site_title || "Janak Panthi"}
+          </a> 
+          <span className="hidden sm:inline">|</span> 
+          <span className="whitespace-nowrap">© {new Date().getFullYear()} All rights reserved.</span>
+        </p>
+      </div>
+    </footer>
+  );
+};
 
 export default function App() {
   const { settings, loading: settingsLoading } = useSettings();
+  const { setBadge } = usePWA();
   const location = useLocation();
   const { pathname, hash } = location;
+
+  useEffect(() => {
+    // Clear badge on app load
+    setBadge(0);
+  }, []);
 
   useEffect(() => {
     if (settings.anonymize_ip === 'true') {
@@ -1586,6 +1603,22 @@ export default function App() {
     );
   }
 
+  const { data: awards } = useContent('awards');
+  const isTeamsEnabled = settings.enable_teams_section === 'true';
+  const isHomePage = pathname === '/';
+
+  const navLinks = [
+    { name: settings.nav_label_home || 'Home', href: isHomePage ? '#home' : '/' },
+    { name: settings.nav_label_about || 'About', href: isHomePage ? '#about' : '/#about' },
+    { name: settings.nav_label_projects || 'Projects', href: isHomePage ? '#projects' : '/#projects' },
+    { name: settings.nav_label_skills || 'Skills', href: isHomePage ? '#skills' : '/#skills' },
+    { name: settings.nav_label_awards || 'Awards', href: isHomePage ? '#awards' : '/#awards' },
+    ...(isTeamsEnabled ? [{ name: 'Teams', href: isHomePage ? '#teams' : '/#teams' }] : []),
+    { name: settings.nav_label_gallery || 'Gallery', href: isHomePage ? '#gallery' : '/#gallery' },
+    { name: settings.nav_label_devlogs || 'Dev Logs', href: isHomePage ? '#devlogs' : '/#devlogs' },
+    { name: settings.nav_label_contact || 'Contact', href: isHomePage ? '#contact' : '/#contact' },
+  ];
+
   return (
     <div className="min-h-screen bg-page text-primary selection:bg-accent selection:text-page overflow-x-hidden">
       {!isAdminPage && <Navbar isDark={isDark} toggleDarkMode={toggleDarkMode} />}
@@ -1605,14 +1638,24 @@ export default function App() {
                     title={settings.meta_title || settings.site_title}
                     description={settings.meta_description}
                     keywords={settings.meta_keywords}
-                    image={settings.og_image}
+                    image={settings.og_image || settings.about_image}
+                    appleIcon={settings.apple_icon_180}
+                    pwaIcon={settings.pwa_icon_512}
+                    wikidataId={settings.seo_wikidata_id}
+                    nationality={settings.seo_nationality}
+                    location={settings.seo_location_name}
+                    jobTitle={settings.seo_job_title}
+                    orgName={settings.seo_org_name}
+                    alumniName={settings.seo_alumni_name}
+                    awards={awards || []}
+                    navLinks={navLinks}
                   />
                   <Hero />
                   <About />
                   <Projects />
                   <Skills />
                   <Awards />
-                  <Teams />
+                  {settings.enable_teams_section === 'true' && <Teams />}
                   <Gallery />
                   <DevLogs />
                   {settings.enable_contact_form !== 'false' && <Contact />}
