@@ -439,6 +439,7 @@ const Admin = () => {
               {activeTab === 'skills' && (
                 <div className="space-y-12">
                   <SectionBrandingEditor section="skills" label="Skills" showNotification={showNotification} />
+                  <SkillsContentEditor showNotification={showNotification} />
                   <TableEditor table="skill_tags" fields={['name', 'order_index']} showNotification={showNotification} label="Tag" />
                   <div className="pt-12 border-t border-muted">
                     <TableEditor table="skills" fields={['name', 'icon', 'category', 'order_index']} showNotification={showNotification} label="Skill" />
@@ -1371,18 +1372,89 @@ const SectionBrandingEditor = ({ section, label = section, showNotification }: {
             type="text"
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors"
+            className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-primary outline-none transition-colors"
             placeholder="e.g. Works, Honors, Visuals..."
           />
         </div>
         <button
           onClick={handleSave}
           disabled={saving || !hasChanges}
-          className="w-full sm:w-auto bg-accent text-page px-5 py-2.5 rounded-xl font-bold text-[13px] hover:scale-[1.02] transition-all disabled:opacity-50 shrink-0 whitespace-nowrap flex items-center justify-center gap-2"
+          className="w-full sm:w-auto bg-primary text-page px-5 py-2.5 rounded-xl font-bold text-[13px] hover:scale-[1.02] transition-all disabled:opacity-50 shrink-0 whitespace-nowrap flex items-center justify-center gap-2"
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           <span>Save Branding</span>
         </button>
+      </div>
+    </div>
+  );
+};
+
+const SkillsContentEditor = ({ showNotification }: any) => {
+  const { settings, updateSettings } = useSettings();
+  const [quote, setQuote] = useState('');
+  const [description, setDescription] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setQuote(settings.skills_quote || '');
+      setDescription(settings.skills_description || '');
+    }
+  }, [settings]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateSettings({ 
+        skills_quote: quote,
+        skills_description: description
+      });
+      showNotification('Skills section content updated');
+    } catch (err: any) {
+      showNotification('Failed to update content: ' + err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasChanges = quote !== (settings?.skills_quote || '') || description !== (settings?.skills_description || '');
+
+  return (
+    <div className="bg-alt border border-muted rounded-2xl p-6 mb-8 space-y-6">
+      <h3 className="text-lg font-bold">Skills Section Content</h3>
+      <div className="space-y-4">
+        <div>
+          <label className="text-xs font-mono uppercase tracking-wider text-secondary/60 block mb-2">
+            Skills Intro Quote (Italic)
+          </label>
+          <AutoExpandingTextarea 
+            value={quote}
+            onChange={(e: any) => setQuote(e.target.value)}
+            className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-primary outline-none transition-colors min-h-[80px]"
+            placeholder="e.g. Combining artistic vision with technical precision..."
+          />
+        </div>
+        <div>
+          <label className="text-xs font-mono uppercase tracking-wider text-secondary/60 block mb-2">
+            Skills Detailed Description
+          </label>
+          <AutoExpandingTextarea 
+            value={description}
+            onChange={(e: any) => setDescription(e.target.value)}
+            className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-primary outline-none transition-colors min-h-[120px]"
+            placeholder="e.g. My approach to design and entrepreneurship is holistic..."
+          />
+        </div>
+        <div className="flex justify-end">
+          <button
+            onClick={handleSave}
+            disabled={saving || !hasChanges}
+            className="w-full sm:w-auto bg-primary text-page px-5 py-2.5 rounded-xl font-bold text-[13px] hover:scale-[1.02] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            <span>Save Section Content</span>
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1453,6 +1525,15 @@ const SettingsEditor = ({ showNotification }: any) => {
         { key: 'notify_cv_request', label: 'CV Access Requests', type: 'toggle' },
         { key: 'notify_contact_exchange', label: 'Contact Exchange Requests', type: 'toggle' },
         { key: 'notify_todo_reminder', label: 'Task & Todo Reminders', type: 'toggle' },
+      ]
+    },
+    {
+      id: 'skills_section',
+      label: 'Skills Section',
+      icon: <Cpu size={18} />,
+      fields: [
+        { key: 'skills_quote', label: 'Skills Quote/Intro (Italic)', type: 'textarea' },
+        { key: 'skills_description', label: 'Skills Detailed Description', type: 'textarea' },
       ]
     },
     {

@@ -425,13 +425,15 @@ END:VCARD`;
           <h2 className="font-mono text-[10px] uppercase tracking-[0.2em] text-secondary mb-4 px-2">Social Profiles</h2>
           <div className="grid grid-cols-4 gap-4">
             {/* WhatsApp Shortcut */}
-            <motion.button
-              whileHover={{ y: -5 }}
-              onClick={handleWhatsApp}
-              className="aspect-square bg-card border border-muted rounded-2xl flex items-center justify-center text-secondary hover:text-[#25D366] hover:border-[#25D366] transition-all"
-            >
-              <MessageCircle className="w-6 h-6" />
-            </motion.button>
+            {showPhone && (
+              <motion.button
+                whileHover={{ y: -5 }}
+                onClick={handleWhatsApp}
+                className="aspect-square bg-card border border-muted rounded-2xl flex items-center justify-center text-secondary hover:text-[#25D366] hover:border-[#25D366] transition-all"
+              >
+                <MessageCircle className="w-6 h-6" />
+              </motion.button>
+            )}
             
             {/* Website Shortcut */}
             <motion.a

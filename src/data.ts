@@ -27,9 +27,9 @@ export const DEV_LOGS_DATA = [
   {
     id: 1,
     date: "OCT 24, 2024",
-    title: "Top AI Tools for Creative Editors",
+    title: "Top Digital Tools for Creative Editors",
     excerpt: "Exploring the tools that are reshaping how we curate and process visual narratives in the digital age.",
-    content: "Artificial Intelligence is no longer a futuristic concept; it's a present-day reality that's fundamentally changing the creative landscape. For editors, AI tools offer unprecedented capabilities in automating tedious tasks, enhancing visual quality, and even suggesting creative directions. From automated color grading to AI-powered object removal, the toolkit available to the modern editor is expanding rapidly. In this article, we'll dive deep into the top AI tools that every creative editor should have in their arsenal in 2024.",
+    content: "Advanced technology is no longer a futuristic concept; it's a present-day reality that's fundamentally changing the creative landscape. For editors, modern digital tools offer unprecedented capabilities in automating tedious tasks, enhancing visual quality, and even suggesting creative directions. From automated color grading to smart object removal, the toolkit available to the modern editor is expanding rapidly. In this article, we'll dive deep into the top professional tools that every creative editor should have in their arsenal in 2024.",
     image: "https://lh3.googleusercontent.com/aida-public/AB6AXuDyRWYxnK0fLBFmTYIERq_oGEz4pd8bMDZzZHiXh3jbozOB4vKDGdKNe3mpieBV87EfycAV4DqsbkgKKJIW4RKqMAtzZtBaH0gMdjm2ke6QOaVYXs7Q1ng9Z8O08MkrUgYJHyoABCOTuCTIJ-BaV4dmKoQLBt6Pop1ZANo1fkonEtFHBXLZgP1uxybKWySTgIZvNM3xC2AjbFVAE7Bbn8sddvAu_yJPVBqvB5VT2gydHHgEkPB8B-JYYFSnXfleI5Xe2gu1Yc9ekbA0"
   },
   {

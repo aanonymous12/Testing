@@ -69,13 +69,31 @@ const getSupabase = () => {
 let emailTransporter: any = null;
 const getTransporter = () => {
   if (!emailTransporter) {
-    emailTransporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD,
-      },
-    });
+    const host = process.env.SMTP_HOST;
+    const port = parseInt(process.env.SMTP_PORT || '587');
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+    const secure = process.env.SMTP_SECURE === 'true';
+
+    if (host && user && pass) {
+      console.log(`Initializing SMTP transporter: ${host}:${port}`);
+      emailTransporter = nodemailer.createTransport({
+        host,
+        port,
+        secure,
+        auth: { user, pass },
+      });
+    } else {
+      // Fallback to Gmail if SMTP is not fully configured
+      console.log("SMTP not fully configured, falling back to Gmail (if provided)");
+      emailTransporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: process.env.GMAIL_USER || process.env.SMTP_USER,
+          pass: process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS,
+        },
+      });
+    }
   }
   return emailTransporter;
 };
@@ -301,8 +319,8 @@ app.post("/api/v1/notify", contactLimiter, async (req, res) => {
       }
     }
 
-    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-      console.warn("Gmail credentials missing. Skipping email notification.");
+    if (!(process.env.SMTP_USER && process.env.SMTP_PASS) && !(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)) {
+      console.warn("Email credentials missing. Skipping email notification.");
       return res.status(200).json({ status: "skipped", reason: "credentials_missing" });
     }
 
@@ -851,8 +869,11 @@ URL:https://janakpanthi.com.np
 END:VCARD`;
 
       try {
+        const fromName = process.env.SMTP_FROM_NAME || "Janak Panthi";
+        const fromEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER;
+        
         await getTransporter().sendMail({
-          from: `"Janak Panthi" <${process.env.GMAIL_USER}>`,
+          from: `"${fromName}" <${fromEmail}>`,
           to: data.userEmail,
           subject,
           html,
@@ -973,9 +994,12 @@ END:VCARD`;
     }
 
     try {
+      const fromName = process.env.SMTP_FROM_NAME || "Janak Panthi";
+      const fromEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER;
+
       console.log(`Attempting to send email: type=${type}, to=${(type === "cv_approval" || type === "admin_reply") ? data.email : recipient}`);
       await getTransporter().sendMail({
-        from: `"Janak Panthi" <${process.env.GMAIL_USER}>`,
+        from: `"${fromName}" <${fromEmail}>`,
         to: (type === "cv_approval" || type === "admin_reply") ? data.email : recipient,
         subject,
         html,

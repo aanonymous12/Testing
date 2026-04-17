@@ -552,10 +552,10 @@ const About = () => {
         initial={{ opacity: 0, x: -50 }}
         whileInView={{ opacity: 1, x: 0 }}
         viewport={{ once: true }}
-        className="relative group"
+        className="relative group w-full max-w-[450px] mx-auto"
       >
         <div className="absolute -inset-4 bg-accent/5 rounded-xl blur-2xl group-hover:bg-accent/10 transition-all duration-500"></div>
-        <div className="relative aspect-square rounded-xl overflow-hidden bg-card border border-muted">
+        <div className="relative w-full aspect-square rounded-xl overflow-hidden bg-card border border-muted shadow-xl">
           <img 
             src={settings.about_image || "https://lh3.googleusercontent.com/aida-public/AB6AXuAgd4MZoIJ7G0LGQdeRBbcOaYBiiyYRpSdCzSBKA1XGnt8a33ePAVQCRpTiVzi8cpgG_new8IT15uCDn75ZoP287dczzhKpjl61vx1aW4gjqhkVviLdYrnKrED8wvOA2xbS7W-zxochrL6ymanS79SsBalgqPQI4uaTee_VFc99564VHv2wbyXq8e2Vv_czD3KQmD_pbMgjiXUVNQ65JbCjqypxB65dmc5lPustvDhpwSIGzkIhfILwnQKNpxXshoAbtVD7m-VSErvV"} 
             alt="Janak Panthi"
@@ -956,10 +956,10 @@ const Skills = () => {
           <div className="flex flex-col space-y-8">
             <div className="space-y-6">
               <p className="text-3xl 2xl:text-4xl font-body leading-tight text-secondary italic">
-                Combining artistic vision with technical precision to deliver high-impact digital experiences.
+                {settings.skills_quote || "Combining artistic vision with technical precision to deliver high-impact digital experiences."}
               </p>
               <p className="text-secondary/80 leading-relaxed text-lg max-w-xl">
-                My approach to design and entrepreneurship is holistic. I believe that a great product is the intersection of clean code, emotive imagery, and a clear business strategy. Each pixel is placed with editorial intent.
+                {settings.skills_description || "My approach to design and entrepreneurship is holistic. I believe that a great product is the intersection of clean code, emotive imagery, and a clear business strategy. Each pixel is placed with editorial intent."}
               </p>
             </div>
             
