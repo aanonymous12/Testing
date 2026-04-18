@@ -91,12 +91,12 @@ TITLE;CHARSET=UTF-8:${title}
 ORG;CHARSET=UTF-8:${org}`;
 
       if (photoBase64) {
-        vCardData += `
-PHOTO;ENCODING=b;TYPE=JPEG:${photoBase64}`;
+        // Fold base64 to 75 chars per line for better compatibility
+        const foldedPhoto = photoBase64.match(/.{1,75}/g)?.join('\r\n ') || photoBase64;
+        vCardData += `\r\nPHOTO;TYPE=JPEG;ENCODING=b:${foldedPhoto}`;
       }
 
-      vCardData += `
-END:VCARD`;
+      vCardData += `\r\nEND:VCARD`;
 
       const vCardBlob = new Blob([vCardData], { type: 'text/vcard;charset=utf-8' });
       const blobURL = URL.createObjectURL(vCardBlob);

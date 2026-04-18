@@ -860,13 +860,59 @@ app.post("/api/v1/notify", contactLimiter, async (req, res) => {
       html = template
         .replace(/\${data.userName}/g, data.userName);
       
-      const vcfContent = `BEGIN:VCARD
+      // Fetch settings for contact details and image
+      const { data: settingsList } = await getSupabase()
+        .from('site_settings')
+        .select('key, value');
+      
+      const settingsMap: Record<string, string> = {};
+      if (settingsList) {
+        settingsList.forEach((s: any) => settingsMap[s.key] = s.value);
+      }
+
+      const vcfName = settingsMap.connect_name || settingsMap.hero_name || 'Janak Panthi';
+      const vcfPhone = settingsMap.connect_phone || settingsMap.contact_phone || data.adminPhone || '+977 98XXXXXXXX';
+      const vcfEmail = settingsMap.connect_email || settingsMap.contact_email || data.adminEmail || 'admin@janakpanthi.com';
+      const vcfUrl = settingsMap.connect_website || settingsMap.contact_website || 'https://janakpanthi.com.np';
+      const vcfTitle = settingsMap.connect_subtitle || settingsMap.hero_subtitle || 'Janak Panthi';
+      const vcfOrg = settingsMap.connect_address || settingsMap.contact_address || 'Texas State University';
+      const vcfImage = settingsMap.connect_image || settingsMap.about_image || "https://www.janakpanthi.com.np/Resources/images/janak_panthi.jpg";
+
+      let photoBase64 = "";
+      if (vcfImage && vcfImage.startsWith('http')) {
+        try {
+          const imgResponse = await fetch(vcfImage);
+          if (imgResponse.ok) {
+            const arrayBuffer = await imgResponse.arrayBuffer();
+            photoBase64 = Buffer.from(arrayBuffer).toString('base64');
+          }
+        } catch (err) {
+          console.error("Error fetching image for server-side VCF:", err);
+        }
+      }
+
+      // Format names for N field
+      const nameParts = vcfName.split(' ');
+      const lastName = nameParts.length > 1 ? nameParts.slice(-1)[0] : '';
+      const firstName = nameParts.length > 1 ? nameParts.slice(0, -1).join(' ') : nameParts[0];
+
+      let vcfContent = `BEGIN:VCARD
 VERSION:3.0
-FN:Janak Panthi
-TEL;TYPE=CELL:${data.adminPhone || '+977 98XXXXXXXX'}
-EMAIL:${data.adminEmail || 'admin@janakpanthi.com'}
-URL:https://janakpanthi.com.np
-END:VCARD`;
+N;CHARSET=UTF-8:${lastName};${firstName};;;
+FN;CHARSET=UTF-8:${vcfName}
+TEL;TYPE=CELL,VOICE;CHARSET=UTF-8:${vcfPhone}
+EMAIL;TYPE=INTERNET;CHARSET=UTF-8:${vcfEmail}
+URL;CHARSET=UTF-8:${vcfUrl.startsWith('http') ? vcfUrl : 'https://' + vcfUrl}
+TITLE;CHARSET=UTF-8:${vcfTitle}
+ORG;CHARSET=UTF-8:${vcfOrg}`;
+
+      if (photoBase64) {
+        // Fold base64 to 75 chars per line for better compatibility
+        const foldedPhoto = photoBase64.match(/.{1,75}/g)?.join('\r\n ') || photoBase64;
+        vcfContent += `\r\nPHOTO;TYPE=JPEG;ENCODING=b:${foldedPhoto}`;
+      }
+
+      vcfContent += `\r\nEND:VCARD`;
 
       try {
         const fromName = process.env.SMTP_FROM_NAME || "Janak Panthi";
@@ -879,9 +925,9 @@ END:VCARD`;
           html,
           attachments: [
             {
-              filename: 'Janak_Panthi.vcf',
+              filename: `${vcfName.replace(/\s+/g, '_')}.vcf`,
               content: vcfContent,
-              contentType: 'text/vcard'
+              contentType: 'text/vcard; charset=UTF-8'
             }
           ]
         });

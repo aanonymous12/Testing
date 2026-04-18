@@ -5,6 +5,7 @@ import { LogIn, Save, Plus, Trash2, LogOut, Settings, Briefcase, Award, Users, I
 import * as LucideIcons from 'lucide-react';
 import Statistics from './components/Statistics';
 import { useContent, useSettings, useSocialLinks, useDevLogs } from './hooks/useContent';
+import { usePWA } from './hooks/usePWA';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -81,6 +82,7 @@ const Admin = () => {
   const [unreadCVRequests, setUnreadCVRequests] = useState(0);
   const [unreadExchanges, setUnreadExchanges] = useState(0);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { setBadge } = usePWA();
 
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -118,8 +120,12 @@ const Admin = () => {
     });
 
     fetchUnreadCounts();
+    const interval = setInterval(fetchUnreadCounts, 60000); // Poll every minute
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+      clearInterval(interval);
+    };
   }, []);
 
   // Auto-logout after 30 minutes of inactivity
@@ -185,6 +191,10 @@ const Admin = () => {
       .select('*', { count: 'exact', head: true })
       .eq('is_read', false);
     setUnreadExchanges(exchangeCount || 0);
+
+    // Update PWA Badge
+    const totalUnread = (msgCount || 0) + (cvCount || 0) + (exchangeCount || 0);
+    setBadge(totalUnread);
   };
 
   const handleLogin = async (e: React.FormEvent) => {

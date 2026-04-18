@@ -19,7 +19,8 @@ import NFCPage from './NFCPage';
 import Admin from './Admin';
 import NotFound from './components/NotFound';
 import { PROJECTS_DATA, DEV_LOGS_DATA } from './data';
-import { useContent, useSettings, useSocialLinks, useDevLogs } from './hooks/useContent';
+import { useContent, useSocialLinks, useDevLogs } from './hooks/useContent';
+import { useSettingsContext } from './context/SettingsContext';
 import { usePWA } from './hooks/usePWA';
 import * as LucideIcons from 'lucide-react';
 import { supabase } from './lib/supabase';
@@ -33,7 +34,7 @@ function cn(...inputs: ClassValue[]) {
 // --- Components ---
 
 const Navbar = ({ isDark, toggleDarkMode }: { isDark: boolean; toggleDarkMode: () => void }) => {
-  const { settings } = useSettings();
+  const { settings } = useSettingsContext();
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const location = useLocation();
@@ -197,7 +198,7 @@ const Typewriter = ({ roles }: { roles: string[] }) => {
 };
 
 const Hero = () => {
-  const { settings, loading } = useSettings();
+  const { settings, loading } = useSettingsContext();
   const { socialLinks, loading: socialLoading } = useSocialLinks();
   const [greeting, setGreeting] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
@@ -244,7 +245,7 @@ const Hero = () => {
               alt="" 
               className="w-full h-full object-cover [mask-image:linear-gradient(to_left,black,transparent)] grayscale"
               referrerPolicy="no-referrer"
-              loading={settings.enable_lazy_loading === 'false' ? 'eager' : 'lazy'}
+              loading="eager"
             />
           </div>
 
@@ -333,7 +334,7 @@ const PasswordModal = ({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClos
   const [isRequesting, setIsRequesting] = useState(false);
   const [requestForm, setRequestForm] = useState({ name: '', company: '', email: '', reason: '' });
   const [requestStatus, setRequestStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
-  const { settings } = useSettings();
+  const { settings } = useSettingsContext();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -531,7 +532,7 @@ const PasswordModal = ({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClos
 };
 
 const About = () => {
-  const { settings, loading } = useSettings();
+  const { settings, loading } = useSettingsContext();
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
 
   const handleDownload = () => {
@@ -879,7 +880,7 @@ const ProjectModal = ({ project, onClose }: any) => {
 };
 
 const Projects = () => {
-  const { settings } = useSettings();
+  const { settings } = useSettingsContext();
   const [selectedProject, setSelectedProject] = useState<any>(null);
   const { data: projects, loading } = useContent('projects');
 
@@ -915,7 +916,7 @@ const Projects = () => {
 };
 
 const Skills = () => {
-  const { settings } = useSettings();
+  const { settings } = useSettingsContext();
   const { data: skills, loading: skillsLoading } = useContent('skills');
   const { data: tags, loading: tagsLoading } = useContent('skill_tags');
 
@@ -1024,7 +1025,7 @@ const Skills = () => {
 };
 
 const Awards = () => {
-  const { settings } = useSettings();
+  const { settings } = useSettingsContext();
   const { data: awards, loading } = useContent('awards');
 
   if (loading) return null;
@@ -1070,6 +1071,7 @@ const Awards = () => {
 };
 
 const Teams = () => {
+  const { settings } = useSettingsContext();
   const { data: collaborators, loading } = useContent('teams');
 
   if (loading) return null;
@@ -1104,7 +1106,7 @@ const Teams = () => {
 };
 
 const Gallery = () => {
-  const { settings } = useSettings();
+  const { settings } = useSettingsContext();
   const { data: images, loading } = useContent('gallery_items');
 
   if (loading) return null;
@@ -1145,7 +1147,7 @@ const Gallery = () => {
 };
 
 const DevLogs = () => {
-  const { settings } = useSettings();
+  const { settings } = useSettingsContext();
   const { posts, loading } = useDevLogs();
 
   if (loading) return null;
@@ -1201,7 +1203,7 @@ const DevLogs = () => {
 };
 
 const Contact = () => {
-  const { settings, loading } = useSettings();
+  const { settings, loading } = useSettingsContext();
   const { socialLinks, loading: socialLoading } = useSocialLinks();
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
@@ -1384,7 +1386,7 @@ const Contact = () => {
 };
 
 const Footer = () => {
-  const { settings } = useSettings();
+  const { settings } = useSettingsContext();
   return (
     <footer className="bg-alt w-full py-12 px-4 md:px-8 mt-24 border-t border-muted">
       <div className="max-w-7xl 2xl:max-w-[1600px] 3xl:max-w-[1800px] mx-auto flex justify-center items-center text-center">
@@ -1401,14 +1403,14 @@ const Footer = () => {
 };
 
 export default function App() {
-  const { settings, loading: settingsLoading } = useSettings();
+  const { settings, loading: settingsLoading } = useSettingsContext();
   const { setBadge } = usePWA();
   const location = useLocation();
   const { pathname, hash } = location;
+  const { data: awards } = useContent('awards');
 
   useEffect(() => {
-    // Clear badge on app load
-    setBadge(0);
+    // Initial setup logic can go here
   }, []);
 
   useEffect(() => {
@@ -1589,6 +1591,24 @@ export default function App() {
 
   const isAdminPage = pathname === '/sudo.admin';
 
+  if (settingsLoading) {
+    return (
+      <div className="min-h-screen bg-page flex items-center justify-center">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex flex-col items-center gap-6"
+        >
+          <div className="relative">
+             <div className="w-16 h-16 border-4 border-accent/20 rounded-full"></div>
+             <div className="absolute top-0 left-0 w-16 h-16 border-4 border-accent border-t-transparent rounded-full animate-spin"></div>
+          </div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-accent animate-pulse">Initializing</p>
+        </motion.div>
+      </div>
+    );
+  }
+
   if (settings.maintenance_mode === 'true' && !isAdminPage) {
     return (
       <div className="min-h-screen bg-page text-primary flex flex-col items-center justify-center p-4 text-center">
@@ -1603,7 +1623,6 @@ export default function App() {
     );
   }
 
-  const { data: awards } = useContent('awards');
   const isTeamsEnabled = settings.enable_teams_section === 'true';
   const isHomePage = pathname === '/';
 

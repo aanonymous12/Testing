@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase, isConfigured } from '../lib/supabase';
+import { useSettingsContext } from '../context/SettingsContext';
 
 export const useContent = (table: string) => {
   const [data, setData] = useState<any[]>([]);
@@ -33,39 +34,7 @@ export const useContent = (table: string) => {
 };
 
 export const useSettings = () => {
-  const [settings, setSettings] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-
-  const fetchSettings = async () => {
-    // Exclude sensitive keys like passwords from being fetched to the frontend
-    const { data, error } = await supabase
-      .from('site_settings')
-      .select('key, value')
-      .not('key', 'in', '("cv_password", "notepad_password", "admin_password")');
-    
-    if (!error && data) {
-      const settingsMap = data.reduce((acc: any, item: any) => {
-        acc[item.key] = item.value;
-        return acc;
-      }, {});
-      setSettings(settingsMap);
-    }
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    fetchSettings();
-  }, []);
-
-  const updateSettings = async (newSettings: Record<string, string>) => {
-    const updates = Object.entries(newSettings).map(([key, value]) => 
-      supabase.from('site_settings').upsert({ key, value }, { onConflict: 'key' })
-    );
-    await Promise.all(updates);
-    await fetchSettings();
-  };
-
-  return { settings, loading, updateSettings };
+  return useSettingsContext();
 };
 
 export const useDevLogs = () => {
@@ -92,24 +61,6 @@ export const useDevLogs = () => {
 };
 
 export const useSocialLinks = () => {
-  const [socialLinks, setSocialLinks] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchSocialLinks = async () => {
-      const { data, error } = await supabase
-        .from('social_links')
-        .select('*')
-        .order('order_index', { ascending: true });
-      
-      if (!error && data) {
-        setSocialLinks(data);
-      }
-      setLoading(false);
-    };
-
-    fetchSocialLinks();
-  }, []);
-
-  return { socialLinks, loading };
+  const { socialLinks, loading: settingsLoading } = useSettings();
+  return { socialLinks, loading: settingsLoading };
 };
