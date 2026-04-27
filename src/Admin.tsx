@@ -69,6 +69,12 @@ const IframeAutoHeight = ({ srcDoc, className }: { srcDoc: string; className?: s
   );
 };
 
+const ensureHttps = (url: string) => {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  return `https://${url}`;
+};
+
 const Admin = () => {
   const [session, setSession] = useState<any>(null);
   const [email, setEmail] = useState('');
@@ -1069,6 +1075,7 @@ CREATE POLICY "Admin Write Access" ON tools FOR ALL USING (auth.role() = 'authen
                       type="url"
                       value={newUrl}
                       onChange={(e) => setNewUrl(e.target.value)}
+                      onBlur={(e) => setNewUrl(ensureHttps(e.target.value))}
                       placeholder="https://example.com"
                       className="w-full bg-alt border border-muted rounded-xl px-4 py-3 focus:border-accent outline-none transition-colors text-sm"
                     />
@@ -3986,6 +3993,11 @@ const ConnectWithMeEditor = ({ showNotification, onRefresh }: any) => {
                   type={field.type}
                   value={localSettings[field.key] || ''}
                   onChange={(e) => setLocalSettings({ ...localSettings, [field.key]: e.target.value })}
+                  onBlur={(e) => {
+                    if (field.key === 'connect_website' && e.target.value) {
+                      setLocalSettings({ ...localSettings, [field.key]: ensureHttps(e.target.value) });
+                    }
+                  }}
                   className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors"
                 />
               )}

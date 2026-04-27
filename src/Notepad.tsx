@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, Trash2, Copy, Check, StickyNote, Download, Trash, 
-  Loader2, Save, Lock, Unlock, Shield, Key, Eye, EyeOff, X 
+  Loader2, Save, Lock, Unlock, Shield, Key, Eye, EyeOff, X,
+  ArrowUpNarrowWide, ArrowDownWideNarrow
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { clsx, type ClassValue } from 'clsx';
@@ -16,6 +17,7 @@ interface NoteCell {
   id: string;
   content: string;
   password?: string;
+  createdAt: number;
 }
 
 const Notepad = () => {
@@ -23,6 +25,7 @@ const Notepad = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [unlockedIds, setUnlockedIds] = useState<Set<string>>(new Set());
   const [showPasswordModal, setShowPasswordModal] = useState<{ id: string; type: 'set' | 'unlock' } | null>(null);
   const [modalPassword, setModalPassword] = useState('');
@@ -45,9 +48,15 @@ const Notepad = () => {
       if (error && error.code !== 'PGRST116') throw error;
       
       if (data && data.value) {
-        setCells(JSON.parse(data.value));
+        const parsed = JSON.parse(data.value);
+        // Migrate existing notes to have createdAt if missing
+        const migrated = parsed.map((c: any, index: number) => ({
+          ...c,
+          createdAt: c.createdAt || (Date.now() - (parsed.length - index) * 1000)
+        }));
+        setCells(migrated);
       } else {
-        setCells([{ id: crypto.randomUUID(), content: '' }]);
+        setCells([{ id: crypto.randomUUID(), content: '', createdAt: Date.now() }]);
       }
     } catch (err: any) {
       console.error('Error fetching notes:', err);
@@ -72,7 +81,7 @@ const Notepad = () => {
   };
 
   const addCell = () => {
-    const newCells = [...cells, { id: crypto.randomUUID(), content: '' }];
+    const newCells = [...cells, { id: crypto.randomUUID(), content: '', createdAt: Date.now() }];
     setCells(newCells);
     saveNotes(newCells);
   };
@@ -88,7 +97,7 @@ const Notepad = () => {
 
   const deleteCell = (id: string) => {
     if (cells.length === 1) {
-      const newCells = [{ id: crypto.randomUUID(), content: '' }];
+      const newCells = [{ id: crypto.randomUUID(), content: '', createdAt: Date.now() }];
       setCells(newCells);
       saveNotes(newCells);
       return;
@@ -107,7 +116,7 @@ const Notepad = () => {
 
   const clearAll = () => {
     if (confirm('Are you sure you want to clear all notes?')) {
-      const newCells = [{ id: crypto.randomUUID(), content: '' }];
+      const newCells = [{ id: crypto.randomUUID(), content: '', createdAt: Date.now() }];
       setCells(newCells);
       saveNotes(newCells);
     }
@@ -203,26 +212,58 @@ const Notepad = () => {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button 
-              onClick={downloadNotes}
-              className="p-3.5 rounded-xl bg-card border border-muted text-secondary hover:text-accent hover:border-accent transition-all group"
-              title="Download Notes"
-            >
-              <Download size={20} className="group-hover:-translate-y-0.5 transition-transform" />
-            </button>
-            <button 
-              onClick={clearAll}
-              className="p-3.5 rounded-xl bg-card border border-muted text-secondary hover:text-red-500 hover:border-red-500 transition-all group"
-              title="Clear All"
-            >
-              <Trash size={20} className="group-hover:rotate-12 transition-transform" />
-            </button>
+          <div className="flex flex-wrap items-center gap-2 md:gap-3 w-full md:w-auto">
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button 
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+                }}
+                className="flex-1 sm:flex-none p-3 md:p-3.5 rounded-xl bg-card border border-muted text-secondary hover:text-accent hover:border-accent transition-all group flex items-center justify-center gap-2 min-w-[100px]"
+                title={sortOrder === 'asc' ? "Sort Newest First" : "Sort Oldest First"}
+              >
+                {sortOrder === 'asc' ? (
+                  <ArrowUpNarrowWide size={18} className="md:w-5 md:h-5 group-hover:-translate-y-0.5 transition-transform" />
+                ) : (
+                  <ArrowDownWideNarrow size={18} className="md:w-5 md:h-5 group-hover:translate-y-0.5 transition-transform" />
+                )}
+                <span className="text-[10px] font-mono uppercase tracking-widest font-bold">
+                  {sortOrder === 'asc' ? 'Asc' : 'Desc'}
+                </span>
+              </button>
+              <button 
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  downloadNotes();
+                }}
+                className="p-3 md:p-3.5 rounded-xl bg-card border border-muted text-secondary hover:text-accent hover:border-accent transition-all group flex items-center justify-center"
+                title="Download Notes"
+              >
+                <Download size={18} className="md:w-5 md:h-5 group-hover:-translate-y-0.5 transition-transform" />
+              </button>
+              <button 
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  clearAll();
+                }}
+                className="p-3 md:p-3.5 rounded-xl bg-card border border-muted text-secondary hover:text-red-500 hover:border-red-500 transition-all group flex items-center justify-center"
+                title="Clear All"
+              >
+                <Trash size={18} className="md:w-5 md:h-5 group-hover:rotate-12 transition-transform" />
+              </button>
+            </div>
             <button
-              onClick={addCell}
-              className="bg-primary text-page px-8 py-3.5 rounded-xl font-bold flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-primary/10"
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                addCell();
+              }}
+              className="flex-1 md:flex-none w-full md:w-auto bg-primary text-page px-5 md:px-8 py-3 md:py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-primary/10 whitespace-nowrap text-sm md:text-base"
             >
-              <Plus size={20} />
+              <Plus size={18} className="md:w-5 md:h-5" />
               <span>New Block</span>
             </button>
           </div>
@@ -231,8 +272,11 @@ const Notepad = () => {
         {/* Notepad Interface */}
         <div className="grid gap-6">
           <AnimatePresence initial={false}>
-            {cells.map((cell, index) => {
-              const isLocked = cell.password && !unlockedIds.has(cell.id);
+            {[...cells]
+              .sort((a, b) => sortOrder === 'asc' ? a.createdAt - b.createdAt : b.createdAt - a.createdAt)
+              .map((cell, visibleIndex) => {
+                const originalIndex = cells.findIndex(c => c.id === cell.id);
+                const isLocked = cell.password && !unlockedIds.has(cell.id);
               
               return (
                 <motion.div
@@ -240,7 +284,7 @@ const Notepad = () => {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ duration: 0.3, delay: index * 0.05 }}
+                  transition={{ duration: 0.3, delay: visibleIndex * 0.05 }}
                   className={cn(
                     "group relative bg-card border border-muted rounded-2xl overflow-hidden hover:border-accent/30 transition-all duration-300",
                     isLocked && "bg-alt/10"
@@ -250,7 +294,7 @@ const Notepad = () => {
                     {/* Left Gutter */}
                     <div className="w-12 md:w-16 bg-muted/30 border-r border-muted flex flex-col items-center py-6 gap-4">
                       <span className="font-mono text-[10px] text-secondary/30 font-bold">
-                        {String(index + 1).padStart(2, '0')}
+                        {String(originalIndex + 1).padStart(2, '0')}
                       </span>
                       <div className="w-px h-full bg-muted/50" />
                       {cell.password && (
@@ -328,8 +372,12 @@ const Notepad = () => {
                               {copiedId === cell.id ? <Check size={16} className="md:w-[18px] md:h-[18px]" /> : <Copy size={16} className="md:w-[18px] md:h-[18px]" />}
                             </button>
                             <button
-                              onClick={() => deleteCell(cell.id)}
-                              className="p-2 md:p-2.5 rounded-lg bg-page border border-muted text-secondary/40 hover:text-red-500 hover:border-red-500 transition-all"
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteCell(cell.id);
+                              }}
+                              className="p-2 md:p-2.5 rounded-lg bg-page border border-muted text-secondary/40 hover:text-red-500 hover:border-red-500 transition-all focus:outline-none focus:ring-2 focus:ring-red-500/20"
                               title="Delete Block"
                             >
                               <Trash2 size={16} className="md:w-[18px] md:h-[18px]" />
