@@ -32,6 +32,18 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  
+  // Strategy for HTML documents: Network-First to ensure fresh index.html
+  if (event.request.mode === 'navigate' || 
+      (event.request.method === 'GET' && event.request.headers.get('accept')?.includes('text/html'))) {
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Strategy for other assets: Cache-First
   event.respondWith(
     caches.match(event.request).then((response) => {
       return response || fetch(event.request);

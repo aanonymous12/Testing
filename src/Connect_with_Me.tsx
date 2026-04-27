@@ -458,10 +458,13 @@ ORG;CHARSET=UTF-8:${org}`;
                   platform.includes('facebook') || 
                   platform.includes('messenger') || 
                   platform === 'fb' ||
+                  platform === 'meta' ||
                   icon.includes('facebook') || 
                   icon.includes('messenger') ||
                   url.includes('facebook.com') ||
                   url.includes('messenger.com') ||
+                  url.includes('fb.com') ||
+                  url.includes('fb.me') ||
                   url.includes('m.me');
                 
                 return !(isFacebook && showPhone);
@@ -591,7 +594,9 @@ ORG;CHARSET=UTF-8:${org}`;
                       const isFacebook = 
                         name.includes('facebook') || 
                         name.includes('messenger') || 
-                        name === 'fb';
+                        name === 'fb' ||
+                        name === 'meta' ||
+                        name.includes('fb.com');
                       return !(isFacebook && showPhone);
                     })
                     .map((option) => (

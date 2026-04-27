@@ -200,6 +200,7 @@ const Typewriter = ({ roles }: { roles: string[] }) => {
 const Hero = () => {
   const { settings, loading } = useSettingsContext();
   const { socialLinks, loading: socialLoading } = useSocialLinks();
+  const showPhone = settings.show_phone_on_connect !== 'false';
   const [greeting, setGreeting] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -311,6 +312,25 @@ const Hero = () => {
                 .filter((link, index, self) => 
                   index === self.findIndex((t) => t.platform === link.platform)
                 )
+                .filter((link) => {
+                  const platform = (link.platform || '').toLowerCase();
+                  const icon = (link.icon_name || '').toLowerCase();
+                  const url = (link.url || '').toLowerCase();
+                  const isFacebook = 
+                    platform.includes('facebook') || 
+                    platform.includes('messenger') || 
+                    platform === 'fb' ||
+                    platform === 'meta' ||
+                    icon.includes('facebook') || 
+                    icon.includes('messenger') ||
+                    url.includes('facebook.com') ||
+                    url.includes('messenger.com') ||
+                    url.includes('fb.com') ||
+                    url.includes('fb.me') ||
+                    url.includes('m.me');
+                  
+                  return !(isFacebook && showPhone);
+                })
                 .map((link) => {
                   const Icon = (LucideIcons as any)[link.icon_name] || LucideIcons.Globe;
                   return (
@@ -1351,10 +1371,13 @@ const Contact = () => {
                     platform.includes('facebook') || 
                     platform.includes('messenger') || 
                     platform === 'fb' ||
+                    platform === 'meta' ||
                     icon.includes('facebook') || 
                     icon.includes('messenger') ||
                     url.includes('facebook.com') ||
                     url.includes('messenger.com') ||
+                    url.includes('fb.com') ||
+                    url.includes('fb.me') ||
                     url.includes('m.me');
                   
                   return !(isFacebook && showPhone);
