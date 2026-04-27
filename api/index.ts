@@ -48,18 +48,30 @@ const LoginSchema = z.object({
 
 // Lazy initialization for Supabase
 let supabaseClient: any = null;
+const isValidUrl = (url: string | undefined): boolean => {
+  if (!url) return false;
+  try {
+    const parsedUrl = new URL(url);
+    return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 const getSupabase = () => {
   if (!supabaseClient) {
     const supabaseUrl = process.env.VITE_SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
-    if (!supabaseUrl || !supabaseKey) {
-      console.warn("Supabase environment variables are missing. Using placeholders.");
+    const isConfigured = supabaseUrl && supabaseKey && isValidUrl(supabaseUrl);
+
+    if (!isConfigured) {
+      console.warn("Supabase environment variables are missing or invalid. Using placeholders.");
     }
 
     supabaseClient = createClient(
-      supabaseUrl || 'https://placeholder.supabase.co',
-      supabaseKey || 'placeholder'
+      isConfigured ? supabaseUrl : 'https://placeholder-project.supabase.co',
+      isConfigured ? supabaseKey : 'placeholder-key'
     );
   }
   return supabaseClient;

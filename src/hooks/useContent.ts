@@ -11,16 +11,23 @@ export const useContent = (table: string) => {
     const fetchData = async () => {
       try {
         if (!isConfigured) {
+          console.warn('Supabase not configured for table:', table);
           throw new Error('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file.');
         }
+        console.log(`Fetching data for table: ${table}...`);
         const { data: result, error: err } = await supabase
           .from(table)
           .select('*')
           .order('order_index', { ascending: true });
 
-        if (err) throw err;
-        setData(result);
+        if (err) {
+          console.error(`Supabase error fetching ${table}:`, err);
+          throw err;
+        }
+        console.log(`Successfully fetched ${result?.length || 0} items for ${table}`);
+        setData(result || []);
       } catch (err: any) {
+        console.error(`Catch error in useContent (${table}):`, err.message);
         setError(err);
       } finally {
         setLoading(false);

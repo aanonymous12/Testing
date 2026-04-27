@@ -459,7 +459,7 @@ const Admin = () => {
               {activeTab === 'awards' && (
                 <div className="space-y-6">
                   <SectionBrandingEditor section="awards" label="Awards" showNotification={showNotification} />
-                  <TableEditor table="awards" fields={['title', 'organization', 'year', 'description']} showNotification={showNotification} label="Award" />
+                  <TableEditor table="awards" fields={['title', 'organization', 'year', 'image_url', 'description']} showNotification={showNotification} label="Award" />
                 </div>
               )}
               {activeTab === 'teams' && (

@@ -1030,6 +1030,20 @@ const Awards = () => {
 
   if (loading) return null;
 
+  if (!awards || awards.length === 0) {
+    return (
+      <section id="awards" className="py-24">
+        <div className="mb-16">
+          <p className="font-mono text-accent uppercase tracking-[0.1em] text-xs mb-4">Recognition</p>
+          <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">Awards & <span className="terracotta-italic">{settings.branding_awards_styled || "Honors"}</span></h2>
+        </div>
+        <div className="bg-card border border-muted border-dashed rounded-[32px] py-20 text-center">
+          <p className="text-secondary/50 font-mono text-xs uppercase tracking-widest">No awards found in transmission</p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section id="awards" className="py-24">
       <div className="mb-16">
@@ -1048,16 +1062,36 @@ const Awards = () => {
             className="group"
           >
             <div className="flex gap-6">
-              <div className="font-mono text-accent text-lg">
+              <div className="font-mono text-accent text-lg shrink-0">
                 {String(index + 1).padStart(2, '0')}
               </div>
-              <div>
+              <div className="flex-1">
+                {award.image_url && (
+                  <div className="w-full aspect-video rounded-xl overflow-hidden mb-6 bg-alt border border-muted group-hover:border-accent transition-colors">
+                    <img 
+                      src={award.image_url} 
+                      alt={award.title} 
+                      className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-500"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                )}
                 <h4 className="font-headline text-2xl font-bold mb-2 transition-colors">
                   {award.title}
                 </h4>
-                <p className="font-mono text-[11px] uppercase tracking-wider text-secondary mb-4">
-                  {award.organization}
-                </p>
+                <div className="flex items-center gap-3 mb-4">
+                  <p className="font-mono text-[11px] uppercase tracking-wider text-accent font-bold">
+                    {award.organization}
+                  </p>
+                  {award.year && (
+                    <>
+                      <span className="text-secondary/40 font-mono text-[11px]">•</span>
+                      <p className="font-mono text-[11px] text-secondary/60">
+                        {award.year}
+                      </p>
+                    </>
+                  )}
+                </div>
                 <p className="text-secondary leading-relaxed max-w-md">
                   {award.description}
                 </p>
@@ -1112,6 +1146,20 @@ const Gallery = () => {
   if (loading) return null;
 
   const featuredImages = images.filter(img => img.is_featured);
+
+  if (images.length === 0) {
+    return (
+      <section id="gallery" className="py-24">
+        <div className="mb-16">
+          <p className="font-mono text-accent uppercase tracking-[0.1em] text-xs mb-4">Galleries</p>
+          <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">My memories <span className="terracotta-italic">{settings.branding_gallery_styled || "Visuals"}</span></h2>
+        </div>
+        <div className="bg-card border border-muted border-dashed rounded-[32px] py-20 text-center">
+          <p className="text-secondary/50 font-mono text-xs uppercase tracking-widest">No visual memories found in storage</p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section id="gallery" className="py-24">
@@ -1244,57 +1292,74 @@ const Contact = () => {
   const mainSocialLinks = socialLinks.filter(link => link.category === 'main');
 
   if (loading || socialLoading) return null;
+  const showPhone = settings.show_phone_on_connect !== 'false';
 
-  return (
-    <section id="contact" className="py-24 border-t border-muted">
-      <div className="max-w-7xl 2xl:max-w-[1600px] 3xl:max-w-[1800px] mx-auto">
-        <div className="mb-16">
-          <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">
-            Excited to collaborate? <span className="terracotta-italic">Connect</span>
-          </h2>
-        <p className="text-secondary max-w-2xl leading-relaxed">
-         Excited to collaborate? Have a project in mind? Contact me via email or phone, and I'll get back to you promptly. Let's bring ideas to life and make a positive impact together!
-        </p>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-20">
-        <div>
-          <div className="space-y-12 mb-16">
-            <div className="flex gap-6 items-start">
-              <div className="w-12 h-12 flex-shrink-0 bg-card flex items-center justify-center rounded-sm border border-muted">
-                <User className="w-5 h-5 text-accent" />
+    return (
+      <section id="contact" className="py-24 border-t border-muted">
+        <div className="max-w-7xl 2xl:max-w-[1600px] 3xl:max-w-[1800px] mx-auto">
+          <div className="mb-16">
+            <h2 className="text-4xl md:text-5xl 2xl:text-6xl font-bold mb-8">
+              Excited to collaborate? <span className="terracotta-italic">Connect</span>
+            </h2>
+          <p className="text-secondary max-w-2xl leading-relaxed">
+           Excited to collaborate? Have a project in mind? Contact me via email or phone, and I'll get back to you promptly. Let's bring ideas to life and make a positive impact together!
+          </p>
+        </div>
+  
+        <div className="grid md:grid-cols-2 gap-20">
+          <div>
+            <div className="space-y-12 mb-16">
+              <div className="flex gap-6 items-start">
+                <div className="w-12 h-12 flex-shrink-0 bg-card flex items-center justify-center rounded-sm border border-muted">
+                  <User className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <h6 className="font-headline font-bold text-sm uppercase tracking-widest mb-1">Name</h6>
+                  <p className="text-secondary">{settings.hero_name || "Janak Panthi"}</p>
+                </div>
               </div>
-              <div>
-                <h6 className="font-headline font-bold text-sm uppercase tracking-widest mb-1">Name</h6>
-                <p className="text-secondary">{settings.hero_name || "Janak Panthi"}</p>
+              <div className="flex gap-6 items-start">
+                <div className="w-12 h-12 flex-shrink-0 bg-card flex items-center justify-center rounded-sm border border-muted">
+                  <MapPin className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <h6 className="font-headline font-bold text-sm uppercase tracking-widest mb-1">Address</h6>
+                  <p className="text-secondary">{settings.contact_address || "Butwal, Nepal | Texas State University, USA"}</p>
+                </div>
               </div>
+              <a href={`mailto:${settings.contact_email || "contact@janakpanthi.com.np"}`} className="flex gap-6 items-start group">
+                <div className="w-12 h-12 flex-shrink-0 bg-card flex items-center justify-center rounded-sm border border-muted group-hover:border-accent transition-colors">
+                  <Mail className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <h6 className="font-headline font-bold text-sm uppercase tracking-widest mb-1">Email</h6>
+                  <p className="text-secondary group-hover:text-accent transition-colors">{settings.contact_email || "contact@janakpanthi.com.np"}</p>
+                </div>
+              </a>
             </div>
-            <div className="flex gap-6 items-start">
-              <div className="w-12 h-12 flex-shrink-0 bg-card flex items-center justify-center rounded-sm border border-muted">
-                <MapPin className="w-5 h-5 text-accent" />
-              </div>
-              <div>
-                <h6 className="font-headline font-bold text-sm uppercase tracking-widest mb-1">Address</h6>
-                <p className="text-secondary">{settings.contact_address || "Butwal, Nepal | Texas State University, USA"}</p>
-              </div>
-            </div>
-            <a href={`mailto:${settings.contact_email || "contact@janakpanthi.com.np"}`} className="flex gap-6 items-start group">
-              <div className="w-12 h-12 flex-shrink-0 bg-card flex items-center justify-center rounded-sm border border-muted group-hover:border-accent transition-colors">
-                <Mail className="w-5 h-5 text-accent" />
-              </div>
-              <div>
-                <h6 className="font-headline font-bold text-sm uppercase tracking-widest mb-1">Email</h6>
-                <p className="text-secondary group-hover:text-accent transition-colors">{settings.contact_email || "contact@janakpanthi.com.np"}</p>
-              </div>
-            </a>
-          </div>
-
-          <div className="flex gap-8">
-            {mainSocialLinks
-              .filter((link, index, self) => 
-                index === self.findIndex((t) => t.platform === link.platform)
-              )
-              .map((link) => {
+  
+            <div className="flex gap-8">
+              {mainSocialLinks
+                .filter((link, index, self) => 
+                  index === self.findIndex((t) => t.platform === link.platform)
+                )
+                .filter((link) => {
+                  const platform = (link.platform || '').toLowerCase();
+                  const icon = (link.icon_name || '').toLowerCase();
+                  const url = (link.url || '').toLowerCase();
+                  const isFacebook = 
+                    platform.includes('facebook') || 
+                    platform.includes('messenger') || 
+                    platform === 'fb' ||
+                    icon.includes('facebook') || 
+                    icon.includes('messenger') ||
+                    url.includes('facebook.com') ||
+                    url.includes('messenger.com') ||
+                    url.includes('m.me');
+                  
+                  return !(isFacebook && showPhone);
+                })
+                .map((link) => {
                 const Icon = (LucideIcons as any)[link.icon_name] || LucideIcons.Globe;
                 return (
                   <a key={link.id} href={link.url} target="_blank" rel="noopener noreferrer">

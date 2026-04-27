@@ -450,6 +450,22 @@ ORG;CHARSET=UTF-8:${org}`;
               .filter((link, index, self) => 
                 index === self.findIndex((t) => t.platform === link.platform)
               )
+              .filter((link) => {
+                const platform = (link.platform || '').toLowerCase();
+                const icon = (link.icon_name || '').toLowerCase();
+                const url = (link.url || '').toLowerCase();
+                const isFacebook = 
+                  platform.includes('facebook') || 
+                  platform.includes('messenger') || 
+                  platform === 'fb' ||
+                  icon.includes('facebook') || 
+                  icon.includes('messenger') ||
+                  url.includes('facebook.com') ||
+                  url.includes('messenger.com') ||
+                  url.includes('m.me');
+                
+                return !(isFacebook && showPhone);
+              })
               .map((link) => {
                 const Icon = (LucideIcons as any)[link.icon_name] || LucideIcons.Globe;
                 return (
@@ -569,7 +585,16 @@ ORG;CHARSET=UTF-8:${org}`;
               <div className="w-full">
                 <h3 className="text-[10px] font-mono uppercase tracking-[0.2em] text-secondary mb-4 text-left px-2">Share via</h3>
                 <div className="flex overflow-x-auto gap-4 pb-4 scrollbar-hide -mx-2 px-2 scroll-smooth">
-                  {shareOptions.map((option) => (
+                  {shareOptions
+                    .filter((option) => {
+                      const name = (option.name || '').toLowerCase();
+                      const isFacebook = 
+                        name.includes('facebook') || 
+                        name.includes('messenger') || 
+                        name === 'fb';
+                      return !(isFacebook && showPhone);
+                    })
+                    .map((option) => (
                     <button
                       key={option.name}
                       onClick={option.action}
