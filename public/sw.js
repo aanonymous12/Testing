@@ -1,8 +1,7 @@
 // Service Worker for Janak Panthi PWA
 const CACHE_NAME = 'janak-panthi-v2';
 const ASSETS_TO_CACHE = [
-  '/manifest.json',
-  '/favicon.ico'
+  '/manifest.json'
 ];
 
 self.addEventListener('install', (event) => {
@@ -56,8 +55,8 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'New Notification';
   const options = {
     body: data.body || 'You have a new message from Janak Panthi.',
-    icon: '/Resources/images/profile-1.jpg',
-    badge: '/favicon.ico',
+    icon: 'https://www.janakpanthi.com.np/Resources/images/profile-1.jpg',
+    badge: 'https://www.janakpanthi.com.np/favicon.ico',
     data: data.url || '/'
   };
 

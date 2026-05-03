@@ -7,16 +7,23 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { SettingsProvider } from './context/SettingsContext';
 import './index.css';
 
-// Register Service Worker
-if ('serviceWorker' in navigator) {
+// Register Service Worker (Production Only)
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').then((registration) => {
       console.log('SW registered: ', registration);
       
       // Check for updates periodically
-      setInterval(() => {
-        registration.update();
+      const updateInterval = setInterval(() => {
+        if (registration) {
+          registration.update().catch(err => {
+            // Silently fail as updates might fail in certain browser states
+            console.debug('SW update skipped or failed:', err);
+          });
+        }
       }, 1000 * 60 * 60); // Every hour
+
+      return () => clearInterval(updateInterval);
     }).catch((registrationError) => {
       console.log('SW registration failed: ', registrationError);
     });

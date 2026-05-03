@@ -1,1138 +1,901 @@
-import express from "express";
-import path from "path";
-import nodemailer from "nodemailer";
-import dotenv from "dotenv";
-import multer from "multer";
-import { google } from "googleapis";
-import { createClient } from "@supabase/supabase-js";
-import rateLimit from "express-rate-limit";
-import { z } from "zod";
+import express, { Request, Response, NextFunction } from 'express';
+import { createClient } from '@supabase/supabase-js';
+import nodemailer from 'nodemailer';
+import multer from 'multer';
+import { z } from 'zod';
+import bcrypt from 'bcryptjs';
+import DOMPurify from 'isomorphic-dompurify';
+import { Ratelimit } from '@upstash/ratelimit';
+import { Redis } from '@upstash/redis';
+import { google } from 'googleapis';
+import cors from 'cors';
+import helmet from 'helmet';
+import * as Sentry from '@sentry/node';
+import { createServer as createViteServer } from 'vite';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Validation Schemas
-const MessageSchema = z.object({
-  name: z.string().min(2).max(100).trim(),
-  email: z.string().email().max(255).trim(),
-  subject: z.string().min(2).max(200).trim().optional(),
-  message: z.string().min(1).max(5000).trim(),
-});
+// ============================================
+// ENVIRONMENT CONFIGURATION
+// ============================================
+const getEnv = (key: string, fallback?: string): string => {
+  const value = process.env[key] || fallback;
+  if (!value && !fallback && key !== 'SENTRY_DSN') {
+    console.warn(`Warning: Environment variable ${key} is missing.`);
+  }
+  return value || '';
+};
 
-const CVRequestSchema = z.object({
-  name: z.string().min(2).max(100).trim(),
-  company: z.string().min(2).max(100).trim(),
-  email: z.string().email().max(255).trim(),
-  reason: z.string().min(5).max(1000).trim(),
-});
+const config = {
+  supabase: {
+    url: getEnv('VITE_SUPABASE_URL'),
+    serviceKey: getEnv('SUPABASE_SERVICE_ROLE_KEY'),
+  },
+  smtp: {
+    host: getEnv('SMTP_HOST'),
+    port: parseInt(getEnv('SMTP_PORT', '587')),
+    secure: getEnv('SMTP_SECURE') === 'true',
+    auth: {
+      user: getEnv('SMTP_USER'),
+      pass: getEnv('SMTP_PASS'),
+    },
+    from: {
+      name: getEnv('SMTP_FROM_NAME', 'Janak Panthi'),
+      email: getEnv('SMTP_FROM_EMAIL'),
+    },
+  },
+  admin: {
+    email: getEnv('ADMIN_EMAIL'),
+  },
+  google: {
+    serviceAccountEmail: getEnv('GOOGLE_SERVICE_ACCOUNT_EMAIL'),
+    privateKey: getEnv('GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY').replace(/\\n/g, '\n'),
+    siteUrl: getEnv('GSC_SITE_URL'),
+  },
+  security: {
+    bcryptRounds: 12,
+    maxFileSize: 5 * 1024 * 1024, // 5MB
+    allowedImageDomains: ['supabase.co', 'janakpanthi.com'],
+    imageTimeout: 5000, // 5 seconds
+  },
+};
 
-const ContactExchangeSchema = z.object({
-  name: z.string().min(2).max(100).trim(),
-  phone: z.string().min(7).max(20).trim(),
-  email: z.string().email().max(255).trim().optional().or(z.literal('')),
-  note: z.string().max(1000).trim().optional().or(z.literal('')),
-});
-
-const VerifyCVSchema = z.object({
-  password: z.string().min(1).max(100),
-});
-
-const VerifyNotepadSchema = z.object({
-  cellId: z.string().uuid().or(z.string().min(1).max(100)),
-  password: z.string().min(1).max(100),
-});
-
-const LoginSchema = z.object({
-  email: z.string().email().max(255).trim(),
-  password: z.string().min(1).max(100),
-});
-
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-
-if (!supabaseUrl || !supabaseKey) {
-  console.error("################################################################");
-  console.error("CRITICAL ERROR: Supabase environment variables are missing!");
-  console.error("Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your environment.");
-  console.error("################################################################");
+// ============================================
+// SENTRY ERROR TRACKING
+// ============================================
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'production',
+    tracesSampleRate: 1.0,
+  });
 }
 
-const supabase = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseKey || 'placeholder'
-);
+// ============================================
+// SUPABASE CLIENT (SERVICE ROLE)
+// ============================================
+let supabaseClient: any = null;
+const getSupabase = () => {
+  if (!supabaseClient) {
+    supabaseClient = createClient(config.supabase.url || 'https://placeholder.supabase.co', config.supabase.serviceKey || 'placeholder', {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
+  }
+  return supabaseClient;
+};
 
-// Rate limiters
-const contactLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // Limit each IP to 10 messages per hour
-  message: { error: "Too many messages sent. Please try again after an hour." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// ============================================
+// DISTRIBUTED RATE LIMITING (UPSTASH)
+// ============================================
+const redis = process.env.UPSTASH_REDIS_REST_URL
+  ? new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+    })
+  : null;
 
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 attempts per 15 minutes
-  message: { error: "Too many attempts, please try again after 15 minutes." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+const rateLimiters = {
+  auth: redis
+    ? new Ratelimit({
+        redis,
+        limiter: Ratelimit.slidingWindow(5, '15 m'),
+        analytics: true,
+        prefix: 'ratelimit:auth',
+      })
+    : null,
 
-const uploadLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 50, // Limit each IP to 50 uploads per hour
-  message: { error: "Too many uploads. Please try again after an hour." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+  contact: redis
+    ? new Ratelimit({
+        redis,
+        limiter: Ratelimit.slidingWindow(10, '60 m'),
+        analytics: true,
+        prefix: 'ratelimit:contact',
+      })
+    : null,
 
-// Multer configuration for strict validation
+  upload: redis
+    ? new Ratelimit({
+        redis,
+        limiter: Ratelimit.slidingWindow(50, '60 m'),
+        analytics: true,
+        prefix: 'ratelimit:upload',
+      })
+    : null,
+
+  general: redis
+    ? new Ratelimit({
+        redis,
+        limiter: Ratelimit.slidingWindow(200, '1 m'),
+        analytics: true,
+        prefix: 'ratelimit:general',
+      })
+    : null,
+};
+
+const createRateLimitMiddleware = (limiterName: keyof typeof rateLimiters) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const limiter = rateLimiters[limiterName];
+
+    if (!limiter) {
+      return next();
+    }
+
+    const identifier = req.ip || req.headers['x-forwarded-for']?.toString() || 'unknown';
+    const { success, limit, reset, remaining } = await limiter.limit(identifier);
+
+    res.setHeader('X-RateLimit-Limit', limit.toString());
+    res.setHeader('X-RateLimit-Remaining', remaining.toString());
+    res.setHeader('X-RateLimit-Reset', reset.toString());
+
+    if (!success) {
+      return res.status(429).json({
+        error: 'Too many requests',
+        retryAfter: Math.ceil((reset - Date.now()) / 1000),
+      });
+    }
+
+    next();
+  };
+};
+
+// ============================================
+// SMTP TRANSPORTER
+// ============================================
+let transporter: any = null;
+const getTransporter = () => {
+  if (!transporter) {
+    const { from, ...transportOptions } = config.smtp;
+    transporter = nodemailer.createTransport(transportOptions as any);
+  }
+  return transporter;
+};
+
+// ============================================
+// MULTER FILE UPLOAD
+// ============================================
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
+    fileSize: config.security.maxFileSize,
+    files: 1,
   },
   fileFilter: (req, file, cb) => {
-    // Allow only common image and document types
     const allowedMimes = [
       'image/jpeg',
       'image/png',
       'image/gif',
       'image/webp',
-      'image/svg+xml',
       'application/pdf',
       'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     ];
-    
+
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only images and documents are allowed.'));
+      cb(new Error(`Invalid file type: ${file.mimetype}`));
     }
-  }
-});
-
-// Service Account Auth
-const getServiceAccountAuth = () => {
-  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  let privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
-  
-  if (privateKey) {
-    // Handle potential quotes and escaped newlines
-    privateKey = privateKey.replace(/^"|"$/g, '').replace(/\\n/g, '\n');
-    
-    // If the key is all on one line (except headers), it might be missing newlines
-    if (privateKey.includes('-----BEGIN PRIVATE KEY-----') && !privateKey.includes('\n', privateKey.indexOf('-----BEGIN PRIVATE KEY-----') + 27)) {
-      const header = '-----BEGIN PRIVATE KEY-----';
-      const footer = '-----END PRIVATE KEY-----';
-      const content = privateKey.replace(header, '').replace(footer, '').replace(/\s/g, '');
-      const chunks = content.match(/.{1,64}/g) || [];
-      privateKey = `${header}\n${chunks.join('\n')}\n${footer}\n`;
-    }
-  }
-
-  if (!clientEmail || !privateKey) {
-    console.warn("Service Account credentials missing:", { 
-      hasEmail: !!clientEmail, 
-      hasKey: !!privateKey 
-    });
-    return null;
-  }
-
-  return new google.auth.JWT({
-    email: clientEmail,
-    key: privateKey,
-    scopes: ["https://www.googleapis.com/auth/webmasters.readonly"]
-  });
-};
-
-const app = express();
-
-// Trust proxy if behind a reverse proxy (like Cloud Run/Nginx/Vercel)
-app.set('trust proxy', 1);
-
-app.use(express.json());
-
-// Email transporter
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
   },
 });
 
-// Health check
-app.get("/api/health", (req, res) => {
-  res.json({ 
-    status: "ok", 
-    env: process.env.NODE_ENV,
-    vercel: !!process.env.VERCEL,
-    supabase: !!process.env.VITE_SUPABASE_URL
-  });
-});
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
 
-// Test route
-app.get("/api/v1/test", (req, res) => {
-  res.json({ message: "API is working correctly", timestamp: new Date().toISOString() });
-});
+  // Security headers
+  const cspConfig = {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://www.googletagmanager.com", "https://www.google-analytics.com", "https://apis.google.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      imgSrc: ["'self'", "data:", "https:", "*.supabase.co", "https://images.unsplash.com", "https://picsum.photos"],
+      connectSrc: ["'self'", "*.supabase.co", "https://www.google-analytics.com", "https://stats.g.doubleclick.net"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      frameSrc: ["'self'", "https://*.google.com", "https://*.run.app"], // Allow preview iframe
+      frameAncestors: ["'self'", "https://ai.studio", "https://*.google.com", "https://*.run.app"], // Allow AI Studio to frame us
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: [],
+    },
+  };
 
-// File upload endpoint with strict validation
-app.post("/api/v1/upload", uploadLimiter, (req, res, next) => {
-  console.log("Upload request received");
-  upload.single('file')(req, res, (err) => {
-    if (err instanceof multer.MulterError) {
-      console.error("Multer error:", err);
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: "File too large. Max size is 5MB." });
-      }
-      return res.status(400).json({ error: err.message });
-    } else if (err) {
-      console.error("Unknown upload error:", err);
-      return res.status(400).json({ error: err.message });
+  app.use(helmet({
+    contentSecurityPolicy: cspConfig,
+    crossOriginEmbedderPolicy: false,
+  }));
+  app.use(cors({ origin: true, credentials: true }));
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+  // SECURITY: Global Input Sanitization Middleware
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
+      const sanitizeObject = (obj: any): any => {
+        if (typeof obj === 'string') {
+          return DOMPurify.sanitize(obj);
+        } else if (Array.isArray(obj)) {
+          return obj.map(sanitizeObject);
+        } else if (typeof obj === 'object' && obj !== null) {
+          const sanitized: any = {};
+          for (const key in obj) {
+            sanitized[key] = sanitizeObject(obj[key]);
+          }
+          return sanitized;
+        }
+        return obj;
+      };
+      req.body = sanitizeObject(req.body);
     }
     next();
   });
-}, async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded" });
+
+  // ============================================
+  // VALIDATION SCHEMAS
+  // ============================================
+  const schemas = {
+    contact: z.object({
+      name: z.string().min(1).max(100).trim(),
+      email: z.string().email().max(255).trim(),
+      phone: z.string().max(20).trim().optional(),
+      subject: z.string().min(1).max(200).trim(),
+      message: z.string().min(1).max(5000).trim(),
+    }),
+
+    cvRequest: z.object({
+      name: z.string().min(1).max(100).trim(),
+      email: z.string().email().max(255).trim(),
+      reason: z.string().min(1).max(1000).trim(),
+    }),
+
+    passwordVerify: z.object({
+      password: z.string().min(1).max(100),
+      type: z.enum(['cv', 'notepad']).optional(),
+    }),
+
+    notify: z.discriminatedUnion('type', [
+      z.object({
+        type: z.literal('message'),
+        data: z.object({
+          name: z.string().min(1).max(100),
+          email: z.string().email(),
+          subject: z.string().min(1).max(200),
+          message: z.string().min(1).max(5000),
+        }),
+      }),
+      z.object({
+        type: z.literal('cv_request'),
+        data: z.object({
+          name: z.string().min(1).max(100),
+          company: z.string().min(1).max(100),
+          email: z.string().email(),
+          reason: z.string().min(1).max(1000),
+        }),
+      }),
+      z.object({
+        type: z.literal('todo_notification'),
+        data: z.object({
+          task: z.string().min(1).max(500),
+        }),
+      }),
+      z.object({
+        type: z.literal('contact_exchange'),
+        data: z.object({
+          name: z.string().min(1).max(100),
+          phone: z.string().max(20),
+          email: z.string().email().optional(),
+          note: z.string().max(500).optional(),
+        }),
+      })
+    ]),
+
+    analyticsQuery: z.object({
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      dimension: z.enum(['date', 'query', 'page', 'country', 'device', 'searchAppearance']).optional(),
+    }),
+
+    notepadSave: z.object({
+      content: z.string().max(100000),
+      password: z.string().max(100).optional(),
+    }),
+
+    adminPasswordUpdate: z.object({
+      key: z.enum(['cv_password', 'notepad_password', 'admin_password']),
+      password: z.string().min(8).max(100),
+    }),
+
+    notePasswordUpdate: z.object({
+      password: z.string().min(4).max(100).or(z.literal('')),
+    }),
+
+    unlockNote: z.object({
+      id: z.string().uuid(),
+      password: z.string().max(100),
+    }),
+
+    trackingUpdate: z.object({
+      gtmId: z.string().regex(/^GTM-[A-Z0-9]+$/, 'Invalid GTM ID format').or(z.literal('')),
+      gaId: z.string().regex(/^G-[A-Z0-9]+$/, 'Invalid GA ID format').or(z.literal('')),
+    }),
+  };
+
+  // ============================================
+  // MIDDLEWARE
+  // ============================================
+  const verifyAdmin = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) return res.status(401).json({ error: 'Unauthorized' });
+
+      const token = authHeader.split(' ')[1];
+      const { data: { user }, error } = await getSupabase().auth.getUser(token);
+
+      if (error || !user) return res.status(401).json({ error: 'Unauthorized' });
+
+      const { data: adminCheck } = await getSupabase()
+        .from('admin_users')
+        .select('user_id')
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .single();
+
+      if (!adminCheck) return res.status(403).json({ error: 'Forbidden' });
+
+      (req as any).user = user;
+      next();
+    } catch (err) {
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  };
+
+  // ============================================
+  // HELPER FUNCTIONS
+  // ============================================
+  async function verifyPassword(password: string, hash: string): Promise<boolean> {
+    return bcrypt.compare(password, hash);
   }
 
-  try {
-    const file = req.file;
-    const fileExt = file.originalname.split('.').pop();
-    const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-    const filePath = `public/${fileName}`;
+  function sanitizeHtml(dirty: string): string {
+    return DOMPurify.sanitize(dirty, {
+      ALLOWED_TAGS: [],
+      ALLOWED_ATTR: [],
+    });
+  }
 
-    console.log(`Uploading file to Supabase: ${fileName} (${file.mimetype})`);
+  async function getSecurePassword(key: string): Promise<string | null> {
+    const { data, error } = await getSupabase()
+      .from('secure_passwords')
+      .select('hashed_value')
+      .eq('key', key)
+      .single();
 
-    // Upload to Supabase from server
-    const { data, error: uploadError } = await supabase.storage
-      .from('images')
-      .upload(filePath, file.buffer, {
-        contentType: file.mimetype,
+    if (error || !data) return null;
+    return data.hashed_value;
+  }
+
+  async function recordFailedAttempt(key: string): Promise<boolean> {
+    const { data } = await getSupabase()
+      .from('secure_passwords')
+      .select('failed_attempts, locked_until')
+      .eq('key', key)
+      .single();
+
+    if (!data) return false;
+
+    if (data.locked_until && new Date(data.locked_until) > new Date()) return true;
+
+    const newAttempts = (data.failed_attempts || 0) + 1;
+    const shouldLock = newAttempts >= 5;
+
+    await getSupabase()
+      .from('secure_passwords')
+      .update({
+        failed_attempts: newAttempts,
+        locked_until: shouldLock ? new Date(Date.now() + 30 * 60 * 1000) : null,
+      })
+      .eq('key', key);
+
+    return shouldLock;
+  }
+
+  async function resetFailedAttempts(key: string): Promise<void> {
+    await getSupabase()
+      .from('secure_passwords')
+      .update({
+        failed_attempts: 0,
+        locked_until: null,
+        last_verified_at: new Date().toISOString(),
+      })
+      .eq('key', key);
+  }
+
+  async function sendEmailNotification(to: string, subject: string, templateKey: string, templateData: Record<string, any>) {
+    try {
+      const { data: template } = await getSupabase()
+        .from('site_settings')
+        .select('value')
+        .eq('key', templateKey)
+        .single();
+
+      if (!template?.value) return;
+
+      let html = template.value;
+      for (const [key, value] of Object.entries(templateData)) {
+        const regex = new RegExp(`\\$\\{data\\.${key}\\}`, 'g');
+        html = html.replace(regex, sanitizeHtml(String(value)));
+      }
+
+      await getTransporter().sendMail({
+        from: `"${config.smtp.from.name}" <${config.smtp.from.email}>`,
+        to,
+        subject: sanitizeHtml(subject),
+        html,
+      });
+    } catch (err) {
+      console.error('Email error:', err);
+      Sentry.captureException(err);
+    }
+  }
+
+  // ============================================
+  // API ROUTES
+  // ============================================
+  app.get('/api/v1/health', (req, res) => {
+    res.json({ status: 'ok', version: '2.0.0' });
+  });
+
+  app.post('/api/v1/admin/notes/:id/password', verifyAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { password } = schemas.notePasswordUpdate.parse(req.body);
+      
+      let password_hash = null;
+      if (password) {
+        password_hash = await bcrypt.hash(password, 10);
+      }
+
+      const { error } = await getSupabase()
+        .from('notes')
+        .update({ 
+          password_hash,
+          is_locked: !!password_hash 
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (err) {
+      console.error('Note password update error:', err);
+      res.status(500).json({ error: 'Failed to update note password' });
+    }
+  });
+
+  app.post('/api/v1/auth/verify-password', createRateLimitMiddleware('auth'), async (req, res) => {
+    try {
+      const { password, type } = schemas.passwordVerify.parse(req.body);
+      const key = type === 'cv' ? 'cv_password' : 'notepad_password';
+      
+      const { data: passwordData, error } = await getSupabase()
+        .from('secure_passwords')
+        .select('hashed_value, failed_attempts, locked_until')
+        .eq('key', key)
+        .single();
+
+      if (error || !passwordData) {
+        return res.status(500).json({ error: 'Security credentials not found or configured' });
+      }
+
+      // Check if account is locked
+      if (passwordData.locked_until && new Date(passwordData.locked_until) > new Date()) {
+        return res.status(423).json({ 
+          error: 'Account locked due to too many failed attempts.',
+          lockedUntil: passwordData.locked_until
+        });
+      }
+
+      const isValid = await verifyPassword(password, passwordData.hashed_value);
+      
+      if (!isValid) {
+        const isLocked = await recordFailedAttempt(key);
+        return res.status(401).json({ 
+          error: 'Invalid password',
+          attemptsRemaining: isLocked ? 0 : 5 - ((passwordData.failed_attempts || 0) + 1)
+        });
+      }
+
+      await resetFailedAttempts(key);
+      res.json({ valid: true, success: true });
+    } catch (err) {
+      console.error('Verify error:', err);
+      res.status(500).json({ error: 'Verification failed' });
+    }
+  });
+
+  app.post('/api/v1/admin/settings/tracking', verifyAdmin, async (req, res) => {
+    try {
+      const { gtmId, gaId } = schemas.trackingUpdate.parse(req.body);
+      
+      const { error: gtmError } = await getSupabase()
+        .from('site_settings')
+        .upsert({ key: 'gtm_id', value: gtmId }, { onConflict: 'key' });
+      
+      if (gtmError) throw gtmError;
+
+      const { error: gaError } = await getSupabase()
+        .from('site_settings')
+        .upsert({ key: 'ga_id', value: gaId }, { onConflict: 'key' });
+
+      if (gaError) throw gaError;
+
+      res.json({ success: true, message: 'Tracking IDs updated successfully' });
+    } catch (err) {
+      console.error('Tracking update error:', err);
+      res.status(400).json({ error: err instanceof z.ZodError ? err.issues[0].message : 'Invalid tracking ID format' });
+    }
+  });
+
+  app.post('/api/v1/cv/signed-url', createRateLimitMiddleware('auth'), async (req, res) => {
+    try {
+      const { password } = schemas.passwordVerify.parse(req.body);
+      
+      // 1. Verify CV Password
+      const { data: passwordData } = await getSupabase()
+        .from('secure_passwords')
+        .select('hashed_value, locked_until')
+        .eq('key', 'cv_password')
+        .single();
+
+      if (!passwordData) return res.status(500).json({ error: 'CV access not configured' });
+      if (passwordData.locked_until && new Date(passwordData.locked_until) > new Date()) return res.status(423).json({ error: 'Locked' });
+
+      const isValid = await verifyPassword(password, passwordData.hashed_value);
+      if (!isValid) {
+        await recordFailedAttempt('cv_password');
+        return res.status(401).json({ error: 'Invalid password' });
+      }
+
+      await resetFailedAttempts('cv_password');
+
+      // 2. Get CV path from settings
+      const { data: cvSetting } = await getSupabase()
+        .from('site_settings')
+        .select('value')
+        .eq('key', 'cv_url')
+        .single();
+
+      if (!cvSetting?.value) return res.status(404).json({ error: 'CV not found' });
+
+      // 3. Generate signed URL from private bucket
+      // We assume cv_url is the path in the 'cv_private' bucket
+      const { data, error } = await getSupabase()
+        .storage
+        .from('cv_private')
+        .createSignedUrl(cvSetting.value, 60);
+
+      if (error) throw error;
+      res.json({ url: data.signedUrl });
+    } catch (err) {
+      console.error('CV Signed URL error:', err);
+      res.status(500).json({ error: 'Failed to generate access URL' });
+    }
+  });
+
+  app.get('/api/v1/cv/download/:requestId', async (req, res) => {
+    try {
+      const { requestId } = req.params;
+      
+      const { data: request, error } = await getSupabase()
+        .from('cv_requests')
+        .select('status')
+        .eq('id', requestId)
+        .single();
+      
+      if (error || !request || request.status !== 'approved') {
+        return res.status(403).send('<h1>Access Denied</h1><p>This CV request has not been approved or does not exist.</p>');
+      }
+
+      const { data: cvSetting } = await getSupabase()
+        .from('site_settings')
+        .select('value')
+        .eq('key', 'cv_url')
+        .single();
+
+      if (!cvSetting?.value) return res.status(404).send('CV not found');
+
+      const { data, error: signedError } = await getSupabase()
+        .storage
+        .from('cv_private')
+        .createSignedUrl(cvSetting.value, 300); // 5 minutes
+
+      if (signedError) throw signedError;
+      res.redirect(data.signedUrl);
+    } catch (err) {
+      console.error('Download error:', err);
+      res.status(500).send('Internal Server Error');
+    }
+  });
+
+  app.post('/api/v1/admin/auth/update-password', createRateLimitMiddleware('auth'), verifyAdmin, async (req, res) => {
+    try {
+      const { key, password } = schemas.adminPasswordUpdate.parse(req.body);
+      const hashed = await bcrypt.hash(password, config.security.bcryptRounds);
+
+      // SECURITY: Ensure we only update valid keys
+      const validKeys = ['cv_password', 'notepad_password', 'admin_password'];
+      if (!validKeys.includes(key)) {
+        return res.status(400).json({ error: 'Invalid password key' });
+      }
+
+      const { error } = await getSupabase()
+        .from('secure_passwords')
+        .upsert({
+          key,
+          hashed_value: hashed,
+          salt: 'auto',
+          algorithm: 'bcrypt',
+          updated_by: (req as any).user.id,
+          updated_at: new Date().toISOString(),
+          rotation_required_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+          failed_attempts: 0,
+          locked_until: null
+        }, { onConflict: 'key' });
+
+      if (error) throw error;
+
+      // Ensure legacy plain text is removed if it existed
+      await getSupabase().from('site_settings').delete().eq('key', key);
+
+      res.json({ success: true, message: 'Password updated and secured' });
+    } catch (err) {
+      console.error('Password Update error:', err);
+      res.status(500).json({ error: 'Failed to update password' });
+    }
+  });
+
+  app.post('/api/v1/auth/verify-cv', createRateLimitMiddleware('auth'), async (req, res) => {
+    // Redirect to consolidated verify-password endpoint logic internally
+    req.body.type = 'cv';
+    const { password } = schemas.passwordVerify.parse(req.body);
+    const key = 'cv_password';
+    
+    const { data: passwordData, error } = await getSupabase()
+      .from('secure_passwords')
+      .select('hashed_value, locked_until')
+      .eq('key', key)
+      .single();
+
+    if (error || !passwordData) return res.status(500).json({ error: 'Not configured' });
+    if (passwordData.locked_until && new Date(passwordData.locked_until) > new Date()) return res.status(423).json({ error: 'Locked' });
+
+    const isValid = await verifyPassword(password, passwordData.hashed_value);
+    if (!isValid) {
+      await recordFailedAttempt(key);
+      return res.status(401).json({ error: 'Invalid', success: false });
+    }
+
+    await resetFailedAttempts(key);
+    res.json({ valid: true, success: true });
+  });
+
+  app.post('/api/v1/auth/verify-notepad', createRateLimitMiddleware('auth'), async (req, res) => {
+    try {
+      const { id, password } = schemas.unlockNote.parse(req.body);
+      
+      const { data: note, error } = await getSupabase()
+        .from('notes')
+        .select('id, content, is_locked, password_hash')
+        .eq('id', id)
+        .single();
+
+      if (error || !note) return res.status(404).json({ error: 'Note not found' });
+      if (!note.is_locked) return res.json({ success: true, content: note.content });
+
+      if (!note.password_hash) {
+        return res.status(500).json({ error: 'Note is locked but no password is set' });
+      }
+
+      const isValid = await bcrypt.compare(password, note.password_hash);
+      if (!isValid) return res.status(401).json({ error: 'Invalid password' });
+
+      res.json({ success: true, content: note.content });
+    } catch (err) {
+      console.error('Unlock error:', err);
+      res.status(500).json({ error: 'Failed to unlock note' });
+    }
+  });
+
+  app.post('/api/v1/notify', createRateLimitMiddleware('general'), async (req, res) => {
+    try {
+      const { type, data } = schemas.notify.parse(req.body);
+      
+      let subject = 'New Notification';
+      let templateKey = 'email_template_generic';
+
+      if (type === 'message') {
+        subject = `New Message from ${data.name}: ${data.subject}`;
+        templateKey = 'email_template_contact';
+      } else if (type === 'cv_request') {
+        subject = `CV Request from ${data.name} (${data.company})`;
+        templateKey = 'email_template_cv_request';
+      } else if (type === 'todo_notification') {
+        subject = `Todo Reminder: ${data.task}`;
+        templateKey = 'email_template_todo';
+      }
+
+      const { data: settings } = await getSupabase().from('site_settings').select('value').eq('key', 'contact_email').single();
+      const adminEmail = settings?.value || config.admin.email;
+
+      await sendEmailNotification(adminEmail, subject, templateKey, data);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('Notification error:', err);
+      res.status(500).json({ error: 'Failed to send notification' });
+    }
+  });
+
+  app.post('/api/v1/contact', createRateLimitMiddleware('contact'), async (req, res) => {
+    try {
+      const data = schemas.contact.parse(req.body);
+      const { error: dbError } = await getSupabase().from('messages').insert({
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        subject: data.subject,
+        message: data.message,
+      });
+
+      if (dbError) throw dbError;
+
+      const { data: notify } = await getSupabase().from('site_settings').select('value').eq('key', 'notify_new_message').single();
+      if (notify?.value === 'true') {
+        await sendEmailNotification(config.admin.email, `New Message: ${data.subject}`, 'email_template_contact', data);
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Error' });
+    }
+  });
+
+  app.post('/api/v1/cv/request', createRateLimitMiddleware('contact'), async (req, res) => {
+    try {
+      const data = schemas.cvRequest.parse(req.body);
+      const { error: dbError } = await getSupabase().from('cv_requests').insert(data);
+      if (dbError) throw dbError;
+
+      await sendEmailNotification(config.admin.email, `CV Request: ${data.name}`, 'email_template_cv_request', data);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Error' });
+    }
+  });
+
+  app.post('/api/v1/upload', createRateLimitMiddleware('upload'), upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'No file' });
+      
+      // SECURITY: Explicit bucket allowlist
+      const allowedBuckets = ['images', 'gallery', 'pdfs'];
+      const isPrivate = req.body.isPrivate === 'true' || req.body.bucket === 'cv';
+      const bucket = isPrivate ? 'cv_private' : (req.body.bucket || 'images');
+      
+      if (!allowedBuckets.includes(req.body.bucket || 'images') && !isPrivate) {
+        return res.status(403).json({ error: 'Forbidden bucket' });
+      }
+
+      // SECURITY: Ensure only admins can upload to private bucket
+      if (isPrivate) {
+        const authHeader = req.headers.authorization;
+        if (!authHeader) return res.status(401).json({ error: 'Unauthorized' });
+        const token = authHeader.split(' ')[1];
+        const { data: { user } } = await getSupabase().auth.getUser(token);
+        if (!user) return res.status(401).json({ error: 'Unauthorized' });
+        
+        const { data: adminCheck } = await getSupabase().from('admin_users').select('user_id').eq('user_id', user.id).eq('is_active', true).single();
+        if (!adminCheck) return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      // SECURITY: Randomize filename to prevent collisions/traversal
+      const fileExt = path.extname(req.file.originalname).toLowerCase();
+      const filePath = `${crypto.randomUUID()}${fileExt}`;
+
+      const { data, error } = await getSupabase().storage.from(bucket).upload(filePath, req.file.buffer, {
+        contentType: req.file.mimetype,
         upsert: false
       });
 
-    if (uploadError) {
-      console.error("Supabase storage error:", uploadError);
-      throw uploadError;
-    }
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('images')
-      .getPublicUrl(filePath);
-
-    console.log("Upload successful:", publicUrl);
-    res.json({ url: publicUrl });
-  } catch (error: any) {
-    console.error("Upload processing error:", error);
-    res.status(500).json({ error: error.message || "Failed to upload file to storage" });
-  }
-});
-
-// API routes
-app.post("/api/v1/notify", contactLimiter, async (req, res) => {
-    const { type, data: rawData } = req.body;
-    const recipient = process.env.ADMIN_EMAIL || "prankytv736@gmail.com";
-
-    // Validate and sanitize data based on type
-    let validatedData: any = rawData;
-    try {
-      if (type === "message") {
-        validatedData = MessageSchema.parse(rawData);
-      } else if (type === "cv_request") {
-        validatedData = CVRequestSchema.parse(rawData);
-      } else if (type === "contact_exchange") {
-        validatedData = ContactExchangeSchema.parse(rawData);
-      }
-      // Note: Admin-triggered types (cv_approval, admin_reply, todo_notification) 
-      // are trusted but could be added here if needed.
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Invalid or malformed data", details: error.issues });
-      }
-      return res.status(400).json({ error: "Data validation failed" });
-    }
-
-    const data = validatedData;
-    console.log(`Received notification request: type=${type}`, data);
-
-    // Check notification preferences for admin-bound notifications
-    const adminBoundTypes: Record<string, string> = {
-      "message": "notify_new_message",
-      "cv_request": "notify_cv_request",
-      "contact_exchange": "notify_contact_exchange",
-      "todo_notification": "notify_todo_reminder"
-    };
-
-    if (adminBoundTypes[type]) {
-      try {
-        const { data: prefData } = await supabase
-          .from('site_settings')
-          .select('value')
-          .eq('key', adminBoundTypes[type])
-          .single();
-        
-        if (prefData && prefData.value === 'false') {
-          console.log(`Admin notifications for ${type} are disabled. Skipping.`);
-          return res.status(200).json({ status: "skipped", reason: "disabled_by_user" });
-        }
-      } catch (e) {
-        console.error("Error checking notification preferences:", e);
-      }
-    }
-
-    if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-      console.warn("Gmail credentials missing. Skipping email notification.");
-      return res.status(200).json({ status: "skipped", reason: "credentials_missing" });
-    }
-
-    // Helper to get template from Supabase or fallback to default
-    const getTemplate = async (key: string, defaultHtml: string) => {
-      try {
-        const { data, error } = await supabase
-          .from('site_settings')
-          .select('value')
-          .eq('key', key)
-          .single();
-        
-        if (!error && data && data.value) {
-          // Replace variables in the template
-          let template = data.value;
-          Object.keys(data).forEach(k => {
-            // This is a bit tricky since we need to replace ${data.name} etc.
-            // We'll handle this manually for each type below to be safe.
-          });
-          return template;
-        }
-      } catch (e) {
-        console.error(`Error fetching template ${key}:`, e);
-      }
-      return defaultHtml;
-    };
-
-    let subject = "";
-    let html = "";
-
-    const commonStyles = `
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-          background-color: #242424;
-          font-family: 'Georgia', 'Times New Roman', serif;
-          padding: 40px 16px;
-        }
-        .email-wrapper {
-          max-width: 580px;
-          margin: 0 auto;
-          background-color: #1a1a18;
-          border: 1px solid rgba(242, 240, 228, 0.08);
-          border-radius: 2px;
-          overflow: hidden;
-        }
-        .email-header {
-          background-color: #2e2d2a;
-          border-bottom: 1px solid rgba(242, 240, 228, 0.08);
-          padding: 28px 36px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-        }
-        .logo-name {
-          font-family: 'Georgia', serif;
-          font-size: 18px;
-          font-weight: normal;
-          color: #f2f0e4;
-          letter-spacing: 0.04em;
-        }
-        .logo-sub {
-          font-size: 11px;
-          color: #7a7570;
-          margin-top: 3px;
-          letter-spacing: 0.1em;
-          text-transform: uppercase;
-        }
-        .status-pill {
-          background-color: rgba(218, 117, 91, 0.12);
-          color: #da755b;
-          font-size: 11px;
-          font-weight: bold;
-          letter-spacing: 0.1em;
-          text-transform: uppercase;
-          padding: 6px 14px;
-          border: 1px solid rgba(218, 117, 91, 0.3);
-          border-radius: 2px;
-          font-family: 'Courier New', monospace;
-        }
-        .divider-bar {
-          height: 3px;
-          background: linear-gradient(90deg, #da755b 0%, rgba(218, 117, 91, 0.3) 60%, transparent 100%);
-        }
-        .email-body {
-          padding: 40px 36px;
-        }
-        .greeting {
-          font-size: 13px;
-          color: #7a7570;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-          margin-bottom: 10px;
-          font-family: 'Courier New', monospace;
-        }
-        .headline {
-          font-size: 26px;
-          color: #f2f0e4;
-          font-weight: normal;
-          line-height: 1.3;
-          margin-bottom: 24px;
-          letter-spacing: 0.01em;
-        }
-        .body-text {
-          font-size: 15px;
-          color: #7a7570;
-          line-height: 1.8;
-          margin-bottom: 24px;
-        }
-        .data-card {
-          background-color: #2e2d2a;
-          border: 1px solid rgba(242, 240, 228, 0.08);
-          border-radius: 2px;
-          overflow: hidden;
-          margin: 28px 0;
-        }
-        .data-card-header {
-          background-color: rgba(218, 117, 91, 0.08);
-          border-bottom: 1px solid rgba(242, 240, 228, 0.08);
-          padding: 12px 20px;
-          font-size: 10px;
-          color: #da755b;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          font-family: 'Courier New', monospace;
-        }
-        .data-row {
-          display: flex;
-          align-items: flex-start;
-          padding: 15px 20px;
-          border-bottom: 1px solid rgba(242, 240, 228, 0.08);
-        }
-        .data-row:last-child {
-          border-bottom: none;
-        }
-        .data-key {
-          font-size: 11px;
-          color: #7a7570;
-          letter-spacing: 0.1em;
-          text-transform: uppercase;
-          font-family: 'Courier New', monospace;
-          width: 90px;
-          flex-shrink: 0;
-          padding-top: 2px;
-        }
-        .data-val {
-          font-size: 14px;
-          color: #f2f0e4;
-          line-height: 1.5;
-        }
-        .data-val.email {
-          color: #da755b;
-          font-family: 'Courier New', monospace;
-          font-size: 13px;
-        }
-        .code-block {
-          background-color: #2e2d2a;
-          border: 1px solid rgba(242, 240, 228, 0.08);
-          border-left: 3px solid #da755b;
-          padding: 24px 28px;
-          margin: 28px 0;
-        }
-        .code-label {
-          font-size: 10px;
-          color: #7a7570;
-          letter-spacing: 0.14em;
-          text-transform: uppercase;
-          font-family: 'Courier New', monospace;
-          margin-bottom: 10px;
-        }
-        .code-value {
-          font-family: 'Courier New', monospace;
-          font-size: 30px;
-          color: #da755b;
-          letter-spacing: 0.22em;
-          font-weight: bold;
-        }
-        .message-section {
-          margin: 20px 0 28px;
-        }
-        .message-label {
-          font-size: 10px;
-          color: #7a7570;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          font-family: 'Courier New', monospace;
-          margin-bottom: 10px;
-        }
-        .message-box {
-          background-color: #2e2d2a;
-          border: 1px solid rgba(242, 240, 228, 0.08);
-          border-left: 3px solid #da755b;
-          padding: 20px 22px;
-          min-height: 80px;
-          font-size: 15px;
-          color: #7a7570;
-          line-height: 1.8;
-          font-style: italic;
-        }
-        .message-empty {
-          color: rgba(122, 117, 112, 0.4);
-          font-size: 13px;
-        }
-        .cta-link {
-          display: inline-block;
-          margin: 20px 0 28px;
-          padding: 13px 28px;
-          background-color: #da755b;
-          color: #1a1a18;
-          text-decoration: none;
-          font-size: 13px;
-          font-family: 'Courier New', monospace;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-          border-radius: 2px;
-        }
-        .small-note {
-          font-size: 13px;
-          color: #7a7570;
-          line-height: 1.7;
-          margin-bottom: 20px;
-        }
-        .rule {
-          border: none;
-          border-top: 1px solid rgba(242, 240, 228, 0.08);
-          margin: 28px 0;
-        }
-        .sign-off {
-          font-size: 14px;
-          color: #7a7570;
-          line-height: 1.8;
-        }
-        .sign-off strong {
-          color: #f2f0e4;
-          font-weight: normal;
-          display: block;
-          margin-top: 4px;
-          font-size: 15px;
-          letter-spacing: 0.02em;
-        }
-        .email-footer {
-          background-color: #1a1a18;
-          border-top: 1px solid rgba(242, 240, 228, 0.08);
-          padding: 18px 36px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-        }
-        .footer-left {
-          font-size: 12px;
-          color: rgba(122, 117, 112, 0.5);
-          font-family: 'Courier New', monospace;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-        }
-        .footer-right {
-          font-size: 12px;
-          color: rgba(122, 117, 112, 0.35);
-          font-family: 'Courier New', monospace;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-        }
-      </style>
-    `;
-
-    if (type === "message") {
-      subject = `New Message from ${data.name}: ${data.subject || 'No Subject'}`;
-      const defaultHtml = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          ${commonStyles}
-        </head>
-        <body>
-          <div class="email-wrapper">
-            <div class="email-header">
-              <div>
-                <div class="logo-name">Janak Panthi</div>
-                <div class="logo-sub">Portfolio Notification</div>
-              </div>
-              <div class="status-pill">New Message</div>
-            </div>
-            <div class="divider-bar"></div>
-            <div class="email-body">
-              <div class="greeting">Contact Form</div>
-              <div class="headline">New Message<br>Received</div>
-              <p class="body-text">Someone reached out via the contact form on your portfolio. The details are below.</p>
-              <div class="data-card">
-                <div class="data-card-header">Sender Details</div>
-                <div class="data-row">
-                  <div class="data-key">Name</div>
-                  <div class="data-val">\${data.name}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Email</div>
-                  <div class="data-val email">\${data.email}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Subject</div>
-                  <div class="data-val">\${data.subject || 'No Subject'}</div>
-                </div>
-              </div>
-              <div class="message-section">
-                <div class="message-label">Message</div>
-                <div class="message-box">
-                  \${data.message ? \`<span style="white-space: pre-wrap;">\${data.message}</span>\` : '<span class="message-empty">No message body was included with this submission.</span>'}
-                </div>
-              </div>
-              <a class="cta-link" href="mailto:\${data.email}">Reply to \${data.name}</a>
-              <p class="small-note">Use the button above to reply directly to <strong>\${data.email}</strong>.</p>
-            </div>
-            <div class="email-footer">
-              <div class="footer-left">Portfolio Bot</div>
-              <div class="footer-right">janakpanthi.com.np</div>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-      const template = await getTemplate('email_template_message', defaultHtml);
-      html = template
-        .replace(/\${data.name}/g, data.name)
-        .replace(/\${data.email}/g, data.email)
-        .replace(/\${data.subject}/g, data.subject || 'No Subject')
-        .replace(/\${data.message}/g, data.message || '');
-    } else if (type === "cv_request") {
-      subject = `New CV Request from ${data.name}`;
-      const defaultHtml = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          ${commonStyles}
-        </head>
-        <body>
-          <div class="email-wrapper">
-            <div class="email-header">
-              <div>
-                <div class="logo-name">Janak Panthi</div>
-                <div class="logo-sub">Portfolio Notification</div>
-              </div>
-              <div class="status-pill">New Request</div>
-            </div>
-            <div class="divider-bar"></div>
-            <div class="email-body">
-              <div class="greeting">Incoming Request</div>
-              <div class="headline">New CV Request<br>Received</div>
-              <p class="body-text">Someone submitted a CV access request from your portfolio. Review the details below and approve or decline from your dashboard.</p>
-              <div class="data-card">
-                <div class="data-card-header">Request Details</div>
-                <div class="data-row">
-                  <div class="data-key">Name</div>
-                  <div class="data-val">\${data.name}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Company</div>
-                  <div class="data-val">\${data.company}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Email</div>
-                  <div class="data-val email">\${data.email}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Reason</div>
-                  <div class="data-val">\${data.reason}</div>
-                </div>
-              </div>
-              <a class="cta-link" href="https://janakpanthi.com.np/admin">Approve Request</a>
-              <p class="small-note">Log in to your portfolio dashboard to approve or decline this request and generate a unique access code for the requester.</p>
-            </div>
-            <div class="email-footer">
-              <div class="footer-left">Portfolio Bot</div>
-              <div class="footer-right">janakpanthi.com.np</div>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-      const template = await getTemplate('email_template_cv_request', defaultHtml);
-      html = template
-        .replace(/\${data.name}/g, data.name)
-        .replace(/\${data.company}/g, data.company)
-        .replace(/\${data.email}/g, data.email)
-        .replace(/\${data.reason}/g, data.reason);
-    } else if (type === "cv_approval") {
-      subject = `CV Access Granted - Janak Panthi Portfolio`;
-      const defaultHtml = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          ${commonStyles}
-        </head>
-        <body>
-          <div class="email-wrapper">
-            <div class="email-header">
-              <div>
-                <div class="logo-name">Janak Panthi</div>
-                <div class="logo-sub">Portfolio and CV Access</div>
-              </div>
-              <div class="status-pill">Access Granted</div>
-            </div>
-            <div class="divider-bar"></div>
-            <div class="email-body">
-              <div class="greeting">Hello, \${data.name}</div>
-              <div class="headline">Your CV Access<br>Has Been Approved</div>
-              <p class="body-text">Your request for CV access has been approved. You can now download the CV using the access code below.</p>
-              <div class="code-block">
-                <div class="code-label">Your Access Code</div>
-                <div class="code-value">\${data.password}</div>
-              </div>
-              <p class="body-text">Visit the portfolio site to download your copy:</p>
-              <a class="cta-link" href="https://janakpanthi.com.np">Janak Panthi Portfolio</a>
-              <p class="small-note">This code is unique to your request. If you have any trouble accessing the file, simply reply to this email and assistance will be provided directly.</p>
-              <hr class="rule">
-              <div class="sign-off">
-                Best regards,
-                <strong>Janak Panthi</strong>
-              </div>
-            </div>
-            <div class="email-footer">
-              <div class="footer-left">Automated Notice</div>
-              <div class="footer-right">Do Not Reply</div>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-      const template = await getTemplate('email_template_cv_approval', defaultHtml);
-      html = template
-        .replace(/\${data.name}/g, data.name)
-        .replace(/\${data.password}/g, data.password);
-    } else if (type === "contact_exchange") {
-      subject = `New Contact Exchange from ${data.name}`;
-      const defaultHtml = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          ${commonStyles}
-        </head>
-        <body>
-          <div class="email-wrapper">
-            <div class="email-header">
-              <div>
-                <div class="logo-name">Janak Panthi</div>
-                <div class="logo-sub">Portfolio Notification</div>
-              </div>
-              <div class="status-pill">New Exchange</div>
-            </div>
-            <div class="divider-bar"></div>
-            <div class="email-body">
-              <div class="greeting">Incoming Contact</div>
-              <div class="headline">New Contact Exchange<br>Received</div>
-              <p class="body-text">Someone shared their contact details with you from your portfolio.</p>
-              <div class="data-card">
-                <div class="data-card-header">Contact Details</div>
-                <div class="data-row">
-                  <div class="data-key">Name</div>
-                  <div class="data-val">\${data.name}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Phone</div>
-                  <div class="data-val">\${data.phone}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Email</div>
-                  <div class="data-val email">\${data.email}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Date</div>
-                  <div class="data-val">\${new Date().toLocaleString()}</div>
-                </div>
-              </div>
-              <a class="cta-link" href="https://janakpanthi.com.np/admin">View in Dashboard</a>
-            </div>
-            <div class="email-footer">
-              <div class="footer-left">Portfolio Bot</div>
-              <div class="footer-right">janakpanthi.com.np</div>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-      const template = await getTemplate('email_template_contact_exchange', defaultHtml);
-      html = template
-        .replace(/\${data.name}/g, data.name)
-        .replace(/\${data.phone}/g, data.phone)
-        .replace(/\${data.email}/g, data.email || 'N/A')
-        .replace(/\${data.note}/g, data.note || 'No note provided');
-    } else if (type === "send_vcf") {
-      subject = `Contact Information - Janak Panthi`;
-      const defaultHtml = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          ${commonStyles}
-        </head>
-        <body>
-          <div class="email-wrapper">
-            <div class="email-header">
-              <div>
-                <div class="logo-name">Janak Panthi</div>
-                <div class="logo-sub">Digital Business Card</div>
-              </div>
-              <div class="status-pill">Contact Card</div>
-            </div>
-            <div class="divider-bar"></div>
-            <div class="email-body">
-              <div class="greeting">Hello, \${data.userName}</div>
-              <div class="headline">My Digital Contact<br>Information</div>
-              <p class="body-text">It was great connecting with you! As requested, here is my digital contact card (VCF) attached to this email.</p>
-              <p class="body-text">You can save this file directly to your phone or computer to keep my contact details handy.</p>
-              <hr class="rule">
-              <div class="sign-off">
-                Best regards,
-                <strong>Janak Panthi</strong>
-              </div>
-            </div>
-            <div class="email-footer">
-              <div class="footer-left">Automated Send</div>
-              <div class="footer-right">janakpanthi.com.np</div>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-      const template = await getTemplate('email_template_send_vcf', defaultHtml);
-      html = template
-        .replace(/\${data.userName}/g, data.userName);
+      if (error) throw error;
       
-      const vcfContent = `BEGIN:VCARD
-VERSION:3.0
-FN:Janak Panthi
-TEL;TYPE=CELL:${data.adminPhone || '+977 98XXXXXXXX'}
-EMAIL:${data.adminEmail || 'hello@janakpanthi.com'}
-URL:https://janakpanthi.com.np
-END:VCARD`;
-
-      try {
-        await transporter.sendMail({
-          from: `"Janak Panthi" <${process.env.GMAIL_USER}>`,
-          to: data.userEmail,
-          subject,
-          html,
-          attachments: [
-            {
-              filename: 'Janak_Panthi.vcf',
-              content: vcfContent,
-              contentType: 'text/vcard'
-            }
-          ]
-        });
-        return res.json({ status: "ok" });
-      } catch (error) {
-        console.error("Error sending VCF email:", error);
-        return res.status(500).json({ error: "Failed to send VCF email" });
+      if (isPrivate) {
+        // Return only the path for private files, not public URL
+        res.json({ path: data.path });
+      } else {
+        const { data: { publicUrl } } = getSupabase().storage.from(bucket).getPublicUrl(data.path);
+        res.json({ url: publicUrl });
       }
-    } else if (type === "admin_reply") {
-      subject = data.subject || "Reply from Janak Panthi";
-      const defaultHtml = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          ${commonStyles}
-        </head>
-        <body>
-          <div class="email-wrapper">
-            <div class="email-header">
-              <div>
-                <div class="logo-name">Janak Panthi</div>
-                <div class="logo-sub">Official Correspondence</div>
-              </div>
-              <div class="status-pill">Reply</div>
-            </div>
-            <div class="divider-bar"></div>
-            <div class="email-body">
-              <div class="greeting">Hello \${data.name},</div>
-              <div class="headline">\${data.subject}</div>
-              <div class="message-section">
-                <div class="message-box" style="font-style: normal; color: #f2f0e4;">
-                  \${data.message ? \`<span style="white-space: pre-wrap;">\${data.message}</span>\` : ''}
-                </div>
-              </div>
-              <hr class="rule">
-              <div class="sign-off">
-                Best regards,
-                <strong>Janak Panthi</strong>
-              </div>
-            </div>
-            <div class="email-footer">
-              <div class="footer-left">Portfolio Admin</div>
-              <div class="footer-right">janakpanthi.com.np</div>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-      const template = await getTemplate('email_template_admin_reply', defaultHtml);
-      html = template
-        .replace(/\${data.name}/g, data.name)
-        .replace(/\${data.subject}/g, data.subject || 'Reply')
-        .replace(/\${data.message}/g, data.message || '');
-    } else if (type === "todo_notification") {
-      subject = `Todo Reminder: ${data.task}`;
-      const defaultHtml = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          ${commonStyles}
-        </head>
-        <body>
-          <div class="email-wrapper">
-            <div class="email-header">
-              <div>
-                <div class="logo-name">Janak Panthi</div>
-                <div class="logo-sub">Task Reminder</div>
-              </div>
-              <div class="status-pill">Priority: \${data.priority}</div>
-            </div>
-            <div class="divider-bar"></div>
-            <div class="email-body">
-              <div class="greeting">Hello Admin,</div>
-              <div class="headline">Task Reminder:<br>\${data.task}</div>
-              <p class="body-text">This is a reminder for a task in your todo list.</p>
-              <div class="data-card">
-                <div class="data-card-header">Task Details</div>
-                <div class="data-row">
-                  <div class="data-key">Task</div>
-                  <div class="data-val">\${data.task}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Priority</div>
-                  <div class="data-val">\${data.priority}</div>
-                </div>
-                <div class="data-row">
-                  <div class="data-key">Due Date</div>
-                  <div class="data-val">\${data.due_date || 'No due date'}</div>
-                </div>
-              </div>
-              <a class="cta-link" href="https://janakpanthi.com.np/admin">Manage Todos</a>
-            </div>
-            <div class="email-footer">
-              <div class="footer-left">Portfolio Bot</div>
-              <div class="footer-right">janakpanthi.com.np</div>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-      const template = await getTemplate('email_template_todo', defaultHtml);
-      html = template
-        .replace(/\${data.task}/g, data.task)
-        .replace(/\${data.priority}/g, data.priority)
-        .replace(/\${data.due_date}/g, data.due_date || 'No due date');
+    } catch (err) {
+      console.error('Upload Error:', err);
+      res.status(500).json({ error: 'Upload failed' });
     }
+  });
 
+  app.get('/api/v1/gsc/stats', createRateLimitMiddleware('general'), async (req, res) => {
     try {
-      console.log(`Attempting to send email: type=${type}, to=${(type === "cv_approval" || type === "admin_reply") ? data.email : recipient}`);
-      await transporter.sendMail({
-        from: `"Janak Panthi" <${process.env.GMAIL_USER}>`,
-        to: (type === "cv_approval" || type === "admin_reply") ? data.email : recipient,
-        subject,
-        html,
+      const { startDate, endDate, dimension } = schemas.analyticsQuery.parse(req.query);
+      
+      const auth = new google.auth.JWT({
+        email: config.google.serviceAccountEmail,
+        key: config.google.privateKey,
+        scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
       });
-      console.log("Email sent successfully");
-      res.json({ status: "ok" });
-    } catch (error) {
-      console.error("Error sending email:", error);
-      res.status(500).json({ error: "Failed to send email: " + (error instanceof Error ? error.message : String(error)) });
-    }
-  });
-
-  // Proxy login route for rate limiting
-  app.post("/api/v1/auth/login", loginLimiter, async (req, res) => {
-    console.log("Login attempt received for:", req.body?.email);
-    try {
-      const { email, password } = LoginSchema.parse(req.body);
-      console.log("Login schema validation passed");
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) {
-        console.error("Supabase login error:", error.message);
-        return res.status(401).json({ error: error.message });
-      }
-      console.log("Login successful for:", email);
-      res.json(data);
-    } catch (error: any) {
-      console.error("Login route error:", error);
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Invalid login format", details: error.issues });
-      }
-      res.status(500).json({ error: error.message || "Internal server error" });
-    }
-  });
-
-  // CV Password verification with rate limiting
-  app.post("/api/v1/auth/verify-cv", loginLimiter, async (req, res) => {
-    try {
-      const { password } = VerifyCVSchema.parse(req.body);
-      const { data, error } = await supabase
-        .from('site_settings')
-        .select('value')
-        .eq('key', 'cv_password')
-        .single();
       
-      if (error) throw error;
-      
-      const isValid = data?.value === password;
-      if (!isValid) {
-        return res.status(401).json({ error: "Incorrect password" });
-      }
-      
-      res.json({ success: true });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Notepad Password verification with rate limiting
-  app.post("/api/v1/auth/verify-notepad", loginLimiter, async (req, res) => {
-    try {
-      const { cellId, password } = VerifyNotepadSchema.parse(req.body);
-      const { data, error } = await supabase
-        .from('site_settings')
-        .select('value')
-        .eq('key', 'public_notepad_data')
-        .single();
-      
-      if (error) throw error;
-      
-      const cells = JSON.parse(data?.value || '[]');
-      const cell = cells.find((c: any) => c.id === cellId);
-      
-      if (!cell || cell.password !== password) {
-        return res.status(401).json({ error: "Incorrect password" });
-      }
-      
-      res.json({ success: true });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Google Search Console API Route
-  app.get("/api/v1/gsc/stats", async (req, res) => {
-    try {
-      const auth = getServiceAccountAuth();
-      const siteUrl = process.env.GSC_SITE_URL || "";
-
-      if (!siteUrl) {
-        return res.status(400).json({ error: "GSC_SITE_URL not configured" });
-      }
-
-      if (!auth) {
-        return res.status(401).json({ error: "Google Service Account not configured" });
-      }
-
-      const searchconsole = google.webmasters({ version: "v3", auth });
-      const startDate = req.query.startDate as string || "2024-01-01";
-      const endDate = req.query.endDate as string || new Date().toISOString().split('T')[0];
-      const dimension = req.query.dimension as string || "date";
-
-      const response = await searchconsole.searchanalytics.query({
-        siteUrl,
+      const sc = google.searchconsole({ version: 'v1', auth });
+      const response = await sc.searchanalytics.query({
+        siteUrl: config.google.siteUrl,
         requestBody: {
-          startDate,
-          endDate,
-          dimensions: dimension.split(','),
-          rowLimit: 100
-        }
+          startDate: (startDate as string) || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          endDate: (endDate as string) || new Date().toISOString().split('T')[0],
+          dimensions: dimension ? [dimension as string] : ['date'],
+          rowLimit: 1000,
+        },
       });
-
       res.json(response.data);
-    } catch (error: any) {
-      console.error("Error fetching GSC stats:", error);
-      const errorMessage = error.response?.data?.error?.message || error.message || "Failed to fetch Search Console data";
-      res.status(500).json({ error: errorMessage });
+    } catch (err) {
+      console.error('GSC Analytics error:', err);
+      res.status(500).json({ error: 'Analytics failed', details: err instanceof Error ? err.message : String(err) });
     }
   });
 
-  // Global error handler
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error("Unhandled server error:", err);
-    // Ensure we always return JSON for API routes
-    if (req.path.startsWith('/api')) {
-      return res.status(500).json({ 
-        error: "Internal server error", 
-        message: process.env.NODE_ENV === 'production' ? "An unexpected error occurred" : err.message 
-      });
-    }
-    next(err);
-  });
-
-async function startServer() {
-  const PORT = 3000;
-
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
-    try {
-      // Dynamic import to avoid issues in production where vite is not installed
-      const { createServer: createViteServer } = await import('vite');
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: "spa",
-      });
-      app.use(vite.middlewares);
-    } catch (e) {
-      console.warn("Vite could not be initialized:", e);
-    }
+  // ============================================
+  // VITE MIDDLEWARE OR STATIC SERVING
+  // ============================================
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      // Check if file exists before sending
-      const indexPath = path.join(distPath, 'index.html');
-      res.sendFile(indexPath, (err) => {
-        if (err) {
-          res.status(404).send("Frontend build not found. Please run 'npm run build' first.");
-        }
-      });
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  // Only listen if not running as a serverless function (Vercel)
-  if (!process.env.VERCEL) {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
-  }
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
 }
 
-// In Vercel, we don't call startServer() because it's async and registers static routes
-// which Vercel handles better via vercel.json. We only call it in non-Vercel environments.
-if (!process.env.VERCEL) {
-  startServer();
-}
-
-export default app;
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});

@@ -17,6 +17,7 @@ export default defineConfig(({mode}) => {
     define: {},
     build: {
       chunkSizeWarningLimit: 4000,
+      sourcemap: false, // SECURITY: Disable source maps in production to hide source code
     },
     resolve: {
       alias: {

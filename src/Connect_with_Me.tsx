@@ -15,10 +15,71 @@ import SEO from './components/SEO';
 import QRCode from 'qrcode';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { sanitizeText, sanitizeUrl } from './lib/security';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+// ============================================
+// SECURITY: Input validation schemas
+// ============================================
+const validateEmail = (email: string): boolean => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email) && email.length <= 255;
+};
+
+const validatePhone = (phone: string): boolean => {
+  // Remove all non-digit characters for validation
+  const digitsOnly = phone.replace(/\D/g, '');
+  // Must be between 10-15 digits (international format)
+  return digitsOnly.length >= 10 && digitsOnly.length <= 15;
+};
+
+const validateName = (name: string): boolean => {
+  // Alphanumeric, spaces, hyphens, apostrophes only
+  const nameRegex = /^[a-zA-Z\s'-]{1,100}$/;
+  return nameRegex.test(name);
+};
+
+// ============================================
+// SECURITY: Allowed image domains for SSRF protection
+// ============================================
+const ALLOWED_IMAGE_DOMAINS = [
+  'supabase.co',
+  'janakpanthi.com',
+  'janakpanthi.com.np',
+  'vercel.app',
+  // Add your CDN domains here
+];
+
+const isAllowedImageUrl = (url: string): boolean => {
+  try {
+    const parsed = new URL(url);
+    
+    // Block internal/private IPs
+    const forbiddenHosts = [
+      'localhost',
+      '127.0.0.1',
+      '0.0.0.0',
+      '169.254.169.254', // AWS metadata
+      '192.168.',
+      '10.',
+      '172.16.',
+    ];
+    
+    if (forbiddenHosts.some(host => parsed.hostname.includes(host))) {
+      return false;
+    }
+    
+    // Check if domain is allowed
+    return ALLOWED_IMAGE_DOMAINS.some(domain => 
+      parsed.hostname.endsWith(domain)
+    );
+  } catch {
+    return false;
+  }
+};
 
 const Connect_with_Me = () => {
   const { settings, loading: settingsLoading } = useSettings();
@@ -38,6 +99,7 @@ const Connect_with_Me = () => {
   const [exchangeEmail, setExchangeEmail] = useState('');
   const [exchangeNote, setExchangeNote] = useState('');
   const [isExchanging, setIsExchanging] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
 
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
     setNotification({ message, type });
@@ -47,12 +109,18 @@ const Connect_with_Me = () => {
   const handleSaveContact = async () => {
     setIsGeneratingVCard(true);
     try {
-      const name = settings.connect_name || settings.hero_name || 'Janak Panthi';
-      const phone = settings.connect_phone || settings.contact_phone || '+1 234 567 890';
-      const email = settings.connect_email || settings.contact_email || 'contact@janakpanthi.com.np';
-      const url = settings.connect_website || settings.contact_website || 'janakpanthi.com.np';
-      const title = settings.connect_subtitle || settings.hero_subtitle || 'Undergraduate Research Assistant';
-      const org = settings.connect_address || settings.contact_address || 'Texas State University';
+      // SECURITY: Sanitize all inputs
+      const name = sanitizeText(settings.connect_name || settings.hero_name || 'Janak Panthi', true);
+      const phone = sanitizeText(settings.connect_phone || settings.contact_phone || '+1 234 567 890', true);
+      const email = sanitizeText(settings.connect_email || settings.contact_email || 'contact@janakpanthi.com.np', true);
+      const url = sanitizeUrl(settings.connect_website || settings.contact_website || 'https://janakpanthi.com.np');
+      const title = sanitizeText(settings.connect_subtitle || settings.hero_subtitle || 'Undergraduate Research Assistant', true);
+      const org = sanitizeText(settings.connect_address || settings.contact_address || 'Texas State University', true);
+
+      // SECURITY: Validate email format
+      if (!validateEmail(email)) {
+        throw new Error('Invalid email format');
+      }
 
       const nameParts = name.split(' ');
       const lastName = nameParts.length > 1 ? nameParts.slice(-1)[0] : '';
@@ -60,11 +128,38 @@ const Connect_with_Me = () => {
 
       let photoBase64 = '';
       const imageUrl = settings.connect_image || settings.about_image || "https://www.janakpanthi.com.np/Resources/images/janak_panthi.jpg";
-      if (imageUrl && imageUrl.startsWith('http')) {
+      
+      // SECURITY: Validate image URL before fetching
+      if (imageUrl && imageUrl.startsWith('http') && isAllowedImageUrl(imageUrl)) {
         try {
-          const response = await fetch(imageUrl, { mode: 'cors' });
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+          const response = await fetch(imageUrl, { 
+            mode: 'cors',
+            signal: controller.signal,
+            headers: {
+              'User-Agent': 'JanakPanthiPortfolio/1.0'
+            }
+          });
+          
+          clearTimeout(timeout);
+
           if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+          
+          // SECURITY: Check content length
+          const contentLength = response.headers.get('content-length');
+          if (contentLength && parseInt(contentLength) > 5 * 1024 * 1024) {
+            throw new Error('Image too large (max 5MB)');
+          }
+
           const blob = await response.blob();
+          
+          // SECURITY: Verify it's actually an image
+          if (!blob.type.startsWith('image/')) {
+            throw new Error('Invalid image type');
+          }
+
           photoBase64 = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onloadend = () => {
@@ -75,23 +170,25 @@ const Connect_with_Me = () => {
             reader.readAsDataURL(blob);
           });
         } catch (error) {
-          console.error('Error fetching image for vCard (likely CORS or invalid URL):', error);
+          console.error('Error fetching image for vCard:', error);
           // Continue without photo if fetch fails
         }
+      } else if (imageUrl && imageUrl.startsWith('http')) {
+        console.warn('Image URL not allowed:', imageUrl);
       }
 
+      // Generate vCard content with sanitized data
       let vCardData = `BEGIN:VCARD
 VERSION:3.0
 N;CHARSET=UTF-8:${lastName};${firstName};;;
 FN;CHARSET=UTF-8:${name}
 TEL;TYPE=CELL,VOICE;CHARSET=UTF-8:${phone}
 EMAIL;TYPE=INTERNET;CHARSET=UTF-8:${email}
-URL;CHARSET=UTF-8:${url.startsWith('http') ? url : 'https://' + url}
+URL;CHARSET=UTF-8:${url || 'https://janakpanthi.com.np'}
 TITLE;CHARSET=UTF-8:${title}
 ORG;CHARSET=UTF-8:${org}`;
 
       if (photoBase64) {
-        // Fold base64 to 75 chars per line for better compatibility
         const foldedPhoto = photoBase64.match(/.{1,75}/g)?.join('\r\n ') || photoBase64;
         vCardData += `\r\nPHOTO;TYPE=JPEG;ENCODING=b:${foldedPhoto}`;
       }
@@ -108,6 +205,8 @@ ORG;CHARSET=UTF-8:${org}`;
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(blobURL);
+      
+      showNotification('Contact card saved successfully!');
     } catch (error) {
       console.error('vCard generation failed:', error);
       showNotification('Failed to generate contact card.', 'error');
@@ -131,6 +230,7 @@ ORG;CHARSET=UTF-8:${org}`;
       setShowQR(true);
     } catch (err) {
       console.error('QR generation failed:', err);
+      showNotification('Failed to generate QR code.', 'error');
     }
   };
 
@@ -146,7 +246,7 @@ ORG;CHARSET=UTF-8:${org}`;
   const handleNativeShare = () => {
     if (navigator.share) {
       navigator.share({
-        title: settings.hero_name || 'Janak Panthi',
+        title: sanitizeText(settings.hero_name || 'Janak Panthi', true),
         url: window.location.href
       }).catch(console.error);
     } else {
@@ -227,55 +327,107 @@ ORG;CHARSET=UTF-8:${org}`;
   ];
 
   const handleWhatsApp = () => {
-    const phone = (settings.connect_phone || settings.contact_phone || '+9779847000000').replace(/\D/g, '');
-    window.open(`https://wa.me/${phone}`, '_blank');
+    const phone = sanitizeText(settings.connect_phone || settings.contact_phone || '', true).replace(/\D/g, '');
+    if (phone) {
+      window.open(`https://wa.me/${phone}`, '_blank');
+    }
+  };
+
+  // SECURITY: Comprehensive form validation
+  const validateExchangeForm = (): boolean => {
+    const errors: Record<string, string> = {};
+
+    // Validate name
+    if (!exchangeName.trim()) {
+      errors.name = 'Name is required';
+    } else if (!validateName(exchangeName)) {
+      errors.name = 'Invalid name format (letters, spaces, hyphens only)';
+    }
+
+    // Validate email
+    if (!exchangeEmail.trim()) {
+      errors.email = 'Email is required';
+    } else if (!validateEmail(exchangeEmail)) {
+      errors.email = 'Invalid email format';
+    }
+
+    // Validate phone
+    if (!exchangePhone.trim()) {
+      errors.phone = 'Phone is required';
+    } else if (!validatePhone(exchangePhone)) {
+      errors.phone = 'Invalid phone format (10-15 digits)';
+    }
+
+    // Validate note length
+    if (exchangeNote.length > 500) {
+      errors.note = 'Note too long (max 500 characters)';
+    }
+
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
   };
 
   const handleExchangeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!exchangeName || !exchangePhone) return;
+    
+    // SECURITY: Validate before submitting
+    if (!validateExchangeForm()) {
+      showNotification('Please fix validation errors', 'error');
+      return;
+    }
     
     setIsExchanging(true);
     try {
+      // SECURITY: Sanitize all inputs
+      const sanitizedData = {
+        name: sanitizeText(exchangeName, true),
+        phone: sanitizeText(exchangePhone, true),
+        email: sanitizeText(exchangeEmail, true),
+        note: sanitizeText(exchangeNote, true)
+      };
+
+      // Insert into database
       const { error } = await supabase
         .from('contact_exchanges')
-        .insert([{ 
-          name: exchangeName, 
-          phone: exchangePhone, 
-          email: exchangeEmail,
-          note: exchangeNote
-        }]);
+        .insert([sanitizedData]);
       
       if (error) throw error;
       
-      // Send email notification to admin
+      // SECURITY: Send notification with error handling
       try {
-        await fetch('/api/v1/notify', {
+        const response = await fetch('/api/v1/notify', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
           body: JSON.stringify({
             type: 'contact_exchange',
-            data: {
-              name: exchangeName,
-              phone: exchangePhone,
-              email: exchangeEmail,
-              note: exchangeNote
-            }
+            data: sanitizedData
           })
         });
+
+        if (!response.ok) {
+          console.error('Notification API error:', response.status);
+        }
       } catch (notifyErr) {
         console.error('Failed to notify admin:', notifyErr);
+        // Don't fail the entire operation if notification fails
       }
       
       showNotification('Contact shared successfully!');
       setShowExchangeModal(false);
       setExchangeName('');
-      setExchangePhone('');
+      setExchangePhone('+1 ');
       setExchangeEmail('');
       setExchangeNote('');
+      setValidationErrors({});
     } catch (err: any) {
       console.error('Exchange error:', err);
-      showNotification('Failed to share contact: ' + (err.message || 'Unknown error'), 'error');
+      showNotification(
+        err.message || 'Failed to share contact. Please try again.', 
+        'error'
+      );
     } finally {
       setIsExchanging(false);
     }
@@ -303,10 +455,34 @@ ORG;CHARSET=UTF-8:${org}`;
   const showPhone = settings.show_phone_on_connect !== 'false';
 
   const contactInfo = [
-    { label: 'Email', value: settings.connect_email || settings.contact_email || 'contact@janakpanthi.com.np', icon: Mail, href: `mailto:${settings.connect_email || settings.contact_email || 'contact@janakpanthi.com.np'}` },
-    ...(showPhone ? [{ label: 'Phone', value: settings.connect_phone || settings.contact_phone || '+977 98XXXXXXXX', icon: Phone, href: `tel:${(settings.connect_phone || settings.contact_phone || '+9779847000000').replace(/\s+/g, '')}` }] : []),
-    { label: 'Website', value: settings.connect_website || settings.contact_website || 'janakpanthi.com.np', icon: Globe, href: (settings.connect_website || settings.contact_website) ? ((settings.connect_website || settings.contact_website).startsWith('http') ? (settings.connect_website || settings.contact_website) : `https://${settings.connect_website || settings.contact_website}`) : 'https://janakpanthi.com.np' },
-    { label: 'Location', value: settings.connect_address || settings.contact_address || 'San Marcos, Texas', icon: MapPin, href: '#' },
+    { 
+      label: 'Email', 
+      value: sanitizeText(settings.connect_email || settings.contact_email || 'contact@janakpanthi.com.np', true), 
+      icon: Mail, 
+      href: `mailto:${sanitizeText(settings.connect_email || settings.contact_email || 'contact@janakpanthi.com.np', true)}` 
+    },
+    ...(showPhone ? [{ 
+      label: 'Phone', 
+      value: sanitizeText(settings.connect_phone || settings.contact_phone || '+977 98XXXXXXXX', true), 
+      icon: Phone, 
+      href: `tel:${sanitizeText(settings.connect_phone || settings.contact_phone || '', true).replace(/\s+/g, '')}` 
+    }] : []),
+    { 
+      label: 'Website', 
+      value: sanitizeText(settings.connect_website || settings.contact_website || 'janakpanthi.com.np', true), 
+      icon: Globe, 
+      href: sanitizeUrl((settings.connect_website || settings.contact_website) ? 
+        ((settings.connect_website || settings.contact_website).startsWith('http') ? 
+          (settings.connect_website || settings.contact_website) : 
+          `https://${settings.connect_website || settings.contact_website}`) : 
+        'https://janakpanthi.com.np') || '#'
+    },
+    { 
+      label: 'Location', 
+      value: sanitizeText(settings.connect_address || settings.contact_address || 'San Marcos, Texas', true), 
+      icon: MapPin, 
+      href: '#' 
+    },
   ];
 
   const connectLinks = socialLinks.filter(link => link.category === 'connect');
@@ -314,8 +490,8 @@ ORG;CHARSET=UTF-8:${org}`;
   return (
     <div className="min-h-screen bg-page text-primary font-body selection:bg-accent selection:text-page pb-12">
       <SEO 
-        title={settings.connect_name || settings.hero_name || "Janak Panthi"}
-        description={settings.connect_bio || "Connect with me via my digital business card."}
+        title={sanitizeText(settings.connect_name || settings.hero_name || "Janak Panthi", true)}
+        description={sanitizeText(settings.connect_bio || "Connect with me via my digital business card.", true)}
         image={settings.connect_image || settings.about_image || "https://www.janakpanthi.com.np/Resources/images/janak_panthi.jpg"}
         url={window.location.href}
       />
@@ -386,7 +562,7 @@ ORG;CHARSET=UTF-8:${org}`;
               <div className="w-32 h-32 rounded-full border-4 border-page bg-card overflow-hidden shadow-xl mx-auto">
                 <img 
                   src={settings.connect_image || settings.about_image || "https://www.janakpanthi.com.np/Resources/images/janak_panthi.jpg"} 
-                  alt={settings.connect_name || settings.hero_name || "Janak Panthi"}
+                  alt={sanitizeText(settings.connect_name || settings.hero_name || "Janak Panthi", true)}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
@@ -395,7 +571,7 @@ ORG;CHARSET=UTF-8:${org}`;
                 <div className="w-2 h-2 bg-page rounded-full animate-pulse"></div>
               </div>
             </motion.div>
-
+ 
             <motion.div
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
@@ -403,18 +579,18 @@ ORG;CHARSET=UTF-8:${org}`;
               className="mt-4"
             >
               <h1 className="text-3xl font-bold font-headline tracking-tight text-accent">
-                {settings.connect_name || settings.hero_name || "Janak Panthi"}
+                {sanitizeText(settings.connect_name || settings.hero_name || "Janak Panthi", true)}
               </h1>
               <p className="text-accent/80 font-mono text-[10px] uppercase tracking-[0.2em] mt-3 font-semibold">
-                {settings.connect_subtitle || settings.hero_subtitle || "Undergraduate Research Assistant"}
+                {sanitizeText(settings.connect_subtitle || settings.hero_subtitle || "Undergraduate Research Assistant", true)}
               </p>
               <div className="flex items-center justify-center gap-2 mt-2">
                 <p className="text-primary/50 font-headline font-semibold text-[10px] uppercase tracking-[0.15em]">
-                  {settings.connect_address || settings.contact_address || "Texas State University"}
+                  {sanitizeText(settings.connect_address || settings.contact_address || "Texas State University", true)}
                 </p>
               </div>
               <p className="text-secondary text-[15px] mt-6 leading-relaxed max-w-[320px] mx-auto opacity-90 font-medium">
-                {settings.connect_bio || "I am currently pursuing a Bachelor's Degree in Computer Science, working as an Undergraduate Research Assistant while continuously expanding my expertise to keep pace with the latest industry trends."}
+                {sanitizeText(settings.connect_bio || "I am currently pursuing a Bachelor's Degree in Computer Science, working as an Undergraduate Research Assistant while continuously expanding my expertise to keep pace with the latest industry trends.", true)}
               </p>
             </motion.div>
           </div>
@@ -438,7 +614,7 @@ ORG;CHARSET=UTF-8:${org}`;
             {/* Website Shortcut */}
             <motion.a
               whileHover={{ y: -5 }}
-              href="https://janakpanthi.com.np"
+              href={sanitizeUrl("https://janakpanthi.com.np") || '#'}
               target="_blank"
               rel="noopener noreferrer"
               className="aspect-square bg-card border border-muted rounded-2xl flex items-center justify-center text-secondary hover:text-accent hover:border-accent transition-all"
@@ -471,10 +647,12 @@ ORG;CHARSET=UTF-8:${org}`;
               })
               .map((link) => {
                 const Icon = (LucideIcons as any)[link.icon_name] || LucideIcons.Globe;
+                const safeUrl = sanitizeUrl(link.url) || '#';
+                
                 return (
                   <motion.a
                     key={link.id}
-                    href={link.url}
+                    href={safeUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     whileHover={{ y: -5 }}
@@ -501,8 +679,10 @@ ORG;CHARSET=UTF-8:${org}`;
               </button>
               <button 
                 onClick={() => {
-                  const phone = (settings.connect_phone || settings.contact_phone || '+9779847000000').replace(/\D/g, '');
-                  window.location.href = `tel:+${phone}`;
+                  const phone = sanitizeText(settings.connect_phone || settings.contact_phone || '').replace(/\D/g, '');
+                  if (phone) {
+                    window.location.href = `tel:+${phone}`;
+                  }
                 }}
                 className="flex flex-col items-center justify-center gap-2 bg-card border border-muted text-primary py-5 rounded-[24px] font-headline font-bold text-[9px] uppercase tracking-[0.15em] hover:scale-[1.02] active:scale-95 transition-all"
               >
@@ -631,7 +811,7 @@ ORG;CHARSET=UTF-8:${org}`;
         )}
       </AnimatePresence>
 
-      {/* Exchange Contact Modal */}
+      {/* Exchange Contact Modal - WITH VALIDATION */}
       <AnimatePresence>
         {showExchangeModal && (
           <motion.div 
@@ -649,7 +829,10 @@ ORG;CHARSET=UTF-8:${org}`;
               onClick={e => e.stopPropagation()}
             >
               <button 
-                onClick={() => setShowExchangeModal(false)}
+                onClick={() => {
+                  setShowExchangeModal(false);
+                  setValidationErrors({});
+                }}
                 className="absolute top-4 right-4 p-2 text-secondary hover:text-accent transition-colors"
               >
                 <X size={20} />
@@ -665,48 +848,109 @@ ORG;CHARSET=UTF-8:${org}`;
 
               <form onSubmit={handleExchangeSubmit} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Your Name</label>
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Your Name *</label>
                   <input 
                     type="text" 
                     required
                     value={exchangeName}
-                    onChange={(e) => setExchangeName(e.target.value)}
+                    onChange={(e) => {
+                      setExchangeName(e.target.value);
+                      if (validationErrors.name) {
+                        setValidationErrors(prev => ({ ...prev, name: '' }));
+                      }
+                    }}
                     placeholder="Full Name"
-                    className="w-full bg-card border border-muted rounded-2xl px-4 py-3 text-sm focus:border-accent outline-none transition-colors"
+                    maxLength={100}
+                    className={cn(
+                      "w-full bg-card border rounded-2xl px-4 py-3 text-sm outline-none transition-colors",
+                      validationErrors.name 
+                        ? "border-red-500 focus:border-red-500" 
+                        : "border-muted focus:border-accent"
+                    )}
                   />
+                  {validationErrors.name && (
+                    <p className="text-xs text-red-500 ml-2 mt-1">{validationErrors.name}</p>
+                  )}
                 </div>
+                
                 <div className="space-y-1">
-                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Email Address</label>
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Email Address *</label>
                   <input 
                     type="email" 
                     required
                     value={exchangeEmail}
-                    onChange={(e) => setExchangeEmail(e.target.value)}
+                    onChange={(e) => {
+                      setExchangeEmail(e.target.value);
+                      if (validationErrors.email) {
+                        setValidationErrors(prev => ({ ...prev, email: '' }));
+                      }
+                    }}
                     placeholder="example@email.com"
-                    className="w-full bg-card border border-muted rounded-2xl px-4 py-3 text-sm focus:border-accent outline-none transition-colors"
+                    maxLength={255}
+                    className={cn(
+                      "w-full bg-card border rounded-2xl px-4 py-3 text-sm outline-none transition-colors",
+                      validationErrors.email 
+                        ? "border-red-500 focus:border-red-500" 
+                        : "border-muted focus:border-accent"
+                    )}
                   />
+                  {validationErrors.email && (
+                    <p className="text-xs text-red-500 ml-2 mt-1">{validationErrors.email}</p>
+                  )}
                 </div>
+                
                 <div className="space-y-1">
-                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Phone Number</label>
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Phone Number *</label>
                   <input 
                     type="tel" 
                     required
                     value={exchangePhone}
-                    onChange={(e) => setExchangePhone(e.target.value)}
+                    onChange={(e) => {
+                      setExchangePhone(e.target.value);
+                      if (validationErrors.phone) {
+                        setValidationErrors(prev => ({ ...prev, phone: '' }));
+                      }
+                    }}
                     placeholder="+1 234 567 890"
-                    className="w-full bg-card border border-muted rounded-2xl px-4 py-3 text-sm focus:border-accent outline-none transition-colors"
+                    maxLength={20}
+                    className={cn(
+                      "w-full bg-card border rounded-2xl px-4 py-3 text-sm outline-none transition-colors",
+                      validationErrors.phone 
+                        ? "border-red-500 focus:border-red-500" 
+                        : "border-muted focus:border-accent"
+                    )}
                   />
+                  {validationErrors.phone && (
+                    <p className="text-xs text-red-500 ml-2 mt-1">{validationErrors.phone}</p>
+                  )}
                 </div>
+                
                 <div className="space-y-1">
                   <label className="text-[10px] font-mono uppercase tracking-wider text-secondary/60 ml-2">Note (Optional)</label>
                   <textarea 
                     value={exchangeNote}
-                    onChange={(e) => setExchangeNote(e.target.value)}
+                    onChange={(e) => {
+                      setExchangeNote(e.target.value);
+                      if (validationErrors.note) {
+                        setValidationErrors(prev => ({ ...prev, note: '' }));
+                      }
+                    }}
                     placeholder="Add a short note..."
                     rows={3}
-                    className="w-full bg-card border border-muted rounded-2xl px-4 py-3 text-sm focus:border-accent outline-none transition-colors resize-none"
+                    maxLength={500}
+                    className={cn(
+                      "w-full bg-card border rounded-2xl px-4 py-3 text-sm outline-none transition-colors resize-none",
+                      validationErrors.note 
+                        ? "border-red-500 focus:border-red-500" 
+                        : "border-muted focus:border-accent"
+                    )}
                   />
+                  {validationErrors.note && (
+                    <p className="text-xs text-red-500 ml-2 mt-1">{validationErrors.note}</p>
+                  )}
+                  <p className="text-xs text-secondary/50 ml-2 mt-1">{exchangeNote.length}/500</p>
                 </div>
+                
                 <button 
                   type="submit"
                   disabled={isExchanging}
@@ -725,4 +969,3 @@ ORG;CHARSET=UTF-8:${org}`;
 };
 
 export default Connect_with_Me;
-

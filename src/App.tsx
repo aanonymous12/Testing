@@ -17,6 +17,7 @@ import Notepad from './Notepad';
 import QRCodeGenerator from './QRCodeGenerator';
 import NFCPage from './NFCPage';
 import Admin from './Admin';
+import ImageOptimizerPage from './pages/ImageOptimizerPage';
 import NotFound from './components/NotFound';
 import { PROJECTS_DATA, DEV_LOGS_DATA } from './data';
 import { useContent, useSocialLinks, useDevLogs } from './hooks/useContent';
@@ -347,7 +348,7 @@ const Hero = () => {
   );
 };
 
-const PasswordModal = ({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClose: () => void; onSuccess: () => void }) => {
+const PasswordModal = ({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClose: () => void; onSuccess: (url: string) => void }) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -359,7 +360,7 @@ const PasswordModal = ({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClos
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/v1/auth/verify-cv', {
+      const response = await fetch('/api/v1/cv/signed-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: password.trim() })
@@ -367,8 +368,8 @@ const PasswordModal = ({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClos
       
       const result = await response.json();
       
-      if (response.ok && result.success) {
-        onSuccess();
+      if (response.ok && result.url) {
+        onSuccess(result.url);
         onClose();
         setPassword('');
         setError(false);
@@ -555,9 +556,9 @@ const About = () => {
   const { settings, loading } = useSettingsContext();
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
 
-  const handleDownload = () => {
+  const handleDownload = (signedUrl?: string) => {
     const link = document.createElement('a');
-    link.href = settings.cv_url || '#';
+    link.href = signedUrl || settings.cv_url || '#';
     link.target = '_blank';
     link.download = 'Janak_Panthi_CV.pdf';
     document.body.appendChild(link);
@@ -1715,16 +1716,16 @@ export default function App() {
   const isHomePage = pathname === '/';
 
   const navLinks = [
-    { name: settings.nav_label_home || 'Home', href: isHomePage ? '#home' : '/' },
-    { name: settings.nav_label_about || 'About', href: isHomePage ? '#about' : '/#about' },
-    { name: settings.nav_label_projects || 'Projects', href: isHomePage ? '#projects' : '/#projects' },
-    { name: settings.nav_label_skills || 'Skills', href: isHomePage ? '#skills' : '/#skills' },
-    { name: settings.nav_label_awards || 'Awards', href: isHomePage ? '#awards' : '/#awards' },
-    ...(isTeamsEnabled ? [{ name: 'Teams', href: isHomePage ? '#teams' : '/#teams' }] : []),
-    { name: settings.nav_label_gallery || 'Gallery', href: isHomePage ? '#gallery' : '/#gallery' },
-    { name: settings.nav_label_devlogs || 'Dev Logs', href: isHomePage ? '#devlogs' : '/#devlogs' },
-    { name: settings.nav_label_contact || 'Contact', href: isHomePage ? '#contact' : '/#contact' },
-  ];
+    { name: settings.nav_label_home || 'Home', href: isHomePage ? '#home' : '/', visible: settings.section_hero_visible !== 'false' },
+    { name: settings.nav_label_about || 'About', href: isHomePage ? '#about' : '/#about', visible: settings.section_about_visible !== 'false' },
+    { name: settings.nav_label_projects || 'Projects', href: isHomePage ? '#projects' : '/#projects', visible: settings.section_projects_visible !== 'false' },
+    { name: settings.nav_label_skills || 'Skills', href: isHomePage ? '#skills' : '/#skills', visible: settings.section_skills_visible !== 'false' },
+    { name: settings.nav_label_awards || 'Awards', href: isHomePage ? '#awards' : '/#awards', visible: settings.section_awards_visible !== 'false' },
+    ...(isTeamsEnabled ? [{ name: 'Teams', href: isHomePage ? '#teams' : '/#teams', visible: settings.section_teams_visible !== 'false' }] : []),
+    { name: settings.nav_label_gallery || 'Gallery', href: isHomePage ? '#gallery' : '/#gallery', visible: settings.section_gallery_visible !== 'false' },
+    { name: settings.nav_label_devlogs || 'Dev Logs', href: isHomePage ? '#devlogs' : '/#devlogs', visible: settings.section_devlogs_visible !== 'false' },
+    { name: settings.nav_label_contact || 'Contact', href: isHomePage ? '#contact' : '/#contact', visible: settings.section_contact_visible !== 'false' },
+  ].filter(link => link.visible);
 
   return (
     <div className="min-h-screen bg-page text-primary selection:bg-accent selection:text-page overflow-x-hidden">
@@ -1758,18 +1759,19 @@ export default function App() {
                     navLinks={navLinks}
                   />
                   <Hero />
-                  <About />
-                  <Projects />
-                  <Skills />
-                  <Awards />
-                  {settings.enable_teams_section === 'true' && <Teams />}
-                  <Gallery />
-                  <DevLogs />
-                  {settings.enable_contact_form !== 'false' && <Contact />}
+                  {settings.section_about_visible !== 'false' && <About />}
+                  {settings.section_projects_visible !== 'false' && <Projects />}
+                  {settings.section_skills_visible !== 'false' && <Skills />}
+                  {settings.section_awards_visible !== 'false' && <Awards />}
+                  {settings.enable_teams_section === 'true' && settings.section_teams_visible !== 'false' && <Teams />}
+                  {settings.section_gallery_visible !== 'false' && <Gallery />}
+                  {settings.section_devlogs_visible !== 'false' && <DevLogs />}
+                  {settings.enable_contact_form !== 'false' && settings.section_contact_visible !== 'false' && <Contact />}
                 </main>
               } />
               <Route path="/gallery" element={<GalleryPage />} />
               <Route path="/devlogs" element={<DevLogsPage />} />
+              <Route path="/img" element={<ImageOptimizerPage />} />
               <Route path="/devlogs/:slug" element={<ArticlePage />} />
               <Route path="/notepad" element={<Notepad />} />
               <Route path="/qr" element={<QRCodeGenerator />} />

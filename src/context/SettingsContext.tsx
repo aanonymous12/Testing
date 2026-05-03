@@ -5,6 +5,7 @@ interface SettingsContextType {
   settings: Record<string, string>;
   loading: boolean;
   updateSettings: (newSettings: Record<string, string>) => Promise<void>;
+  refreshSettings: () => Promise<void>;
   socialLinks: any[];
 }
 
@@ -15,7 +16,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [loading, setLoading] = useState(true);
   const [socialLinks, setSocialLinks] = useState<any[]>([]);
 
-  const fetchData = async () => {
+  const refreshSettings = async () => {
     try {
       // Fetch settings
       const { data: settingsData, error: settingsError } = await supabase
@@ -48,7 +49,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   useEffect(() => {
-    fetchData();
+    refreshSettings();
   }, []);
 
   const updateSettings = async (newSettings: Record<string, string>) => {
@@ -57,14 +58,14 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         supabase.from('site_settings').upsert({ key, value }, { onConflict: 'key' })
       );
       await Promise.all(updates);
-      await fetchData();
+      await refreshSettings();
     } catch (err) {
       console.error('Error updating settings:', err);
     }
   };
 
   return (
-    <SettingsContext.Provider value={{ settings, loading, updateSettings, socialLinks } as any}>
+    <SettingsContext.Provider value={{ settings, loading, updateSettings, refreshSettings, socialLinks } as any}>
       {children}
     </SettingsContext.Provider>
   );

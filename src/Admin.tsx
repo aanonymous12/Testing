@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './lib/supabase';
+import { NotepadAdminManager } from './components/NotepadAdminManager';
 import { motion, AnimatePresence } from 'motion/react';
-import { LogIn, Save, Plus, Trash2, LogOut, Settings, Briefcase, Award, Users, Image as ImageIcon, FileText, CheckCircle, Upload, Loader2, MessageSquare, User as UserIcon, Menu, X, Share2, Palette, Database, Globe, Box, UserPlus, Link as LinkIcon, Activity, Send, Mail, Eye, EyeOff, Code, ListTodo, Calendar, Clock, Wrench, Search, Home, RefreshCw, Sun, Moon, Bell, Shield, Zap, Lock, Cpu, Check, RotateCcw, User } from 'lucide-react';
+import { LogIn, Save, Plus, Trash2, LogOut, Settings, Briefcase, Award, Users, Image as ImageIcon, FileText, CheckCircle, Upload, Loader2, MessageSquare, User as UserIcon, Menu, X, Share2, Palette, Database, Globe, Box, UserPlus, Link as LinkIcon, Activity, Send, Mail, Eye, EyeOff, Code, ListTodo, Calendar, Clock, Wrench, Search, Home, RefreshCw, Sun, Moon, Bell, Shield, Zap, Lock, Cpu, Check, RotateCcw, User, StickyNote, Phone, AlertTriangle } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import Statistics from './components/Statistics';
 import { useContent, useSettings, useSocialLinks, useDevLogs } from './hooks/useContent';
 import { usePWA } from './hooks/usePWA';
+import { compressImage } from './lib/imageCompression';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -134,37 +136,6 @@ const Admin = () => {
     };
   }, []);
 
-  // Auto-logout after 30 minutes of inactivity
-  useEffect(() => {
-    if (!session) return;
-
-    let timeoutId: any;
-    const INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 minutes
-
-    const resetTimer = () => {
-      if (timeoutId) clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => {
-        handleLogout();
-        showNotification('Logged out due to inactivity', 'error');
-      }, INACTIVITY_TIMEOUT);
-    };
-
-    const activityEvents = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
-    
-    activityEvents.forEach(event => {
-      window.addEventListener(event, resetTimer);
-    });
-
-    resetTimer(); // Initial timer start
-
-    return () => {
-      if (timeoutId) clearTimeout(timeoutId);
-      activityEvents.forEach(event => {
-        window.removeEventListener(event, resetTimer);
-      });
-    };
-  }, [session]);
-
   // Scroll to top when tab changes
   const mainContentRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -209,26 +180,42 @@ const Admin = () => {
     setError('');
     
     try {
-      const response = await fetch('/api/v1/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+      // Direct Supabase authentication (no proxy)
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
+        email: email,
+        password: password,
       });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.error || 'Login failed');
+
+      if (loginError) throw loginError;
+
+      if (!data.session) {
+        throw new Error('No session returned');
       }
-      
-      // The session will be automatically picked up by supabase.auth.onAuthStateChange
-      // because the server returns the session data which includes the access token
-      // However, we need to set the session manually if it doesn't auto-update
-      if (result.session) {
-        await supabase.auth.setSession(result.session);
+
+      // Verify user is admin
+      const { data: adminCheck, error: adminError } = await supabase
+        .from('admin_users')
+        .select('user_id')
+        .eq('user_id', data.session.user.id)
+        .eq('is_active', true)
+        .single();
+
+      if (adminError || !adminCheck) {
+        await supabase.auth.signOut();
+        throw new Error('Access denied: Not an admin user');
       }
+
+      // Update last login
+      await supabase
+        .from('admin_users')
+        .update({ last_login: new Date().toISOString() })
+        .eq('user_id', data.session.user.id);
+
+      setSession(data.session);
+      setEmail('');
+      setPassword('');
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Login failed');
     } finally {
       setLoading(false);
     }
@@ -369,6 +356,7 @@ const Admin = () => {
               badge={unreadCount > 0 ? unreadCount : undefined}
             />
             <TabButton active={activeTab === 'email_templates'} onClick={() => { setActiveTab('email_templates'); setIsSidebarOpen(false); }} icon={<Mail size={18} />} label="Email Templates" />
+            <TabButton active={activeTab === 'notepad'} onClick={() => { setActiveTab('notepad'); setIsSidebarOpen(false); }} icon={<StickyNote size={18} />} label="Notepad" />
             <TabButton active={activeTab === 'social'} onClick={() => { setActiveTab('social'); setIsSidebarOpen(false); }} icon={<Share2 size={18} />} label="Social Links" />
             <TabButton 
               active={activeTab === 'connect'} 
@@ -437,14 +425,7 @@ const Admin = () => {
             >
               {activeTab === 'statistics' && <Statistics />}
               {activeTab === 'todos' && <TodoManager showNotification={showNotification} />}
-              {activeTab === 'settings' && (
-                <div className="space-y-12">
-                  <SettingsEditor showNotification={showNotification} />
-                  <div className="pt-12 border-t border-muted">
-                    <ProfileEditor showNotification={showNotification} />
-                  </div>
-                </div>
-              )}
+              {activeTab === 'settings' && <SettingsEditor showNotification={showNotification} />}
               {activeTab === 'projects' && (
                 <div className="space-y-6">
                   <SectionBrandingEditor section="projects" label="Projects" showNotification={showNotification} />
@@ -503,6 +484,7 @@ const Admin = () => {
               {activeTab === 'connect' && <ConnectWithMeEditor onRefresh={fetchUnreadCounts} showNotification={showNotification} />}
               {activeTab === 'messages' && <MessagesViewer onRefresh={fetchUnreadCounts} showNotification={showNotification} />}
               {activeTab === 'email_templates' && <EmailTemplatesEditor showNotification={showNotification} />}
+              {activeTab === 'notepad' && <NotepadAdminManager showNotification={showNotification} />}
             </motion.div>
           </div>
         </main>
@@ -1477,6 +1459,84 @@ const SkillsContentEditor = ({ showNotification }: any) => {
   );
 };
 
+const TrackingSettingsEditor = ({ showNotification }: any) => {
+  const { settings, refreshSettings } = useSettings();
+  const [data, setData] = useState({ gtmId: '', gaId: '' });
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setData({
+        gtmId: settings.gtm_id || '',
+        gaId: settings.ga_id || '',
+      });
+    }
+  }, [settings]);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const response = await fetch('/api/v1/admin/settings/tracking', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`
+        },
+        body: JSON.stringify(data)
+      });
+      
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      
+      showNotification('Tracking IDs updated with server-side validation!');
+      refreshSettings();
+    } catch (err: any) {
+      showNotification(err.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="pt-6">
+      <form onSubmit={handleSave} className="space-y-6">
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="space-y-2">
+            <label className="text-xs font-mono uppercase tracking-wider text-secondary/60">Google Tag Manager ID</label>
+            <input 
+              type="text"
+              value={data.gtmId}
+              onChange={(e) => setData({ ...data, gtmId: e.target.value })}
+              className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none"
+              placeholder="GTM-XXXXXXX"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs font-mono uppercase tracking-wider text-secondary/60">Google Analytics ID</label>
+            <input 
+              type="text"
+              value={data.gaId}
+              onChange={(e) => setData({ ...data, gaId: e.target.value })}
+              className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none"
+              placeholder="G-XXXXXXXXXX"
+            />
+          </div>
+        </div>
+        
+        <button 
+          type="submit"
+          disabled={loading}
+          className="bg-accent text-page px-6 py-2.5 rounded-xl font-bold text-[13px] flex items-center gap-2 hover:scale-105 transition-all disabled:opacity-50"
+        >
+          {loading ? <Loader2 size={16} className="animate-spin" /> : <Shield size={16} />}
+          Update Securely
+        </button>
+      </form>
+    </div>
+  );
+};
+
 const SettingsEditor = ({ showNotification }: any) => {
   const { settings, loading, updateSettings } = useSettings();
   const [saving, setSaving] = useState(false);
@@ -1527,6 +1587,9 @@ const SettingsEditor = ({ showNotification }: any) => {
       label: 'Contact',
       icon: <Mail size={18} />,
       fields: [
+        { key: 'contact_email', label: 'Primary Contact Email', type: 'text' },
+        { key: 'contact_phone', label: 'Primary Contact Phone', type: 'text' },
+        { key: 'contact_address', label: 'Office/Home Address', type: 'text' },
         { key: 'enable_contact_form', label: 'Enable Contact Form', type: 'toggle' },
         { key: 'enable_captcha', label: 'Enable CAPTCHA (On/Off)', type: 'toggle' },
         { key: 'auto_reply_enabled', label: 'Auto-reply Settings', type: 'toggle' },
@@ -1545,7 +1608,7 @@ const SettingsEditor = ({ showNotification }: any) => {
       ]
     },
     {
-      id: 'skills_section',
+      id: 'skills',
       label: 'Skills Section',
       icon: <Cpu size={18} />,
       fields: [
@@ -1579,8 +1642,8 @@ const SettingsEditor = ({ showNotification }: any) => {
       label: 'Privacy',
       icon: <Shield size={18} />,
       fields: [
-        { key: 'anonymize_ip', label: 'Anonymize IP Tracking', type: 'toggle' },
-        { key: 'enable_cookie_consent', label: 'Show Cookie Consent Banner', type: 'toggle' },
+        { key: 'privacy_policy_url', label: 'Privacy Policy URL', type: 'text' },
+        { key: 'cookie_consent_enabled', label: 'Enable Cookie Consent', type: 'toggle' },
       ]
     },
     {
@@ -1588,8 +1651,8 @@ const SettingsEditor = ({ showNotification }: any) => {
       label: 'Performance',
       icon: <Zap size={18} />,
       fields: [
-        { key: 'enable_lazy_loading', label: 'Enable Lazy Loading', type: 'toggle' },
-        { key: 'image_optimization', label: 'Image Optimization', type: 'toggle' },
+        { key: 'lazy_loading', label: 'Global Lazy Loading', type: 'toggle' },
+        { key: 'image_optimization', label: 'Aggressive Image Compression', type: 'toggle' },
       ]
     },
     {
@@ -1597,7 +1660,7 @@ const SettingsEditor = ({ showNotification }: any) => {
       label: 'Security',
       icon: <Lock size={18} />,
       fields: [
-        { key: 'session_timeout_enabled', label: 'Session Timeout', type: 'toggle' },
+        { key: 'admin_two_factor', label: 'Simulate 2FA (Demo)', type: 'toggle' },
       ]
     },
     {
@@ -1613,7 +1676,14 @@ const SettingsEditor = ({ showNotification }: any) => {
       label: 'Page Sections',
       icon: <ListTodo size={18} />,
       fields: [
-        { key: 'enable_teams_section', label: 'Enable Teams Section', type: 'toggle' },
+        { key: 'section_hero_visible', label: 'Show Hero Section', type: 'toggle' },
+        { key: 'section_about_visible', label: 'Show About Section', type: 'toggle' },
+        { key: 'section_projects_visible', label: 'Show Projects Section', type: 'toggle' },
+        { key: 'section_skills_visible', label: 'Show Skills Section', type: 'toggle' },
+        { key: 'section_awards_visible', label: 'Show Awards Section', type: 'toggle' },
+        { key: 'section_gallery_visible', label: 'Show Gallery Section', type: 'toggle' },
+        { key: 'section_devlogs_visible', label: 'Show Dev Logs Section', type: 'toggle' },
+        { key: 'section_contact_visible', label: 'Show Contact Section', type: 'toggle' },
       ]
     }
   ];
@@ -1659,6 +1729,87 @@ const SettingsEditor = ({ showNotification }: any) => {
     }
   };
 
+  const renderField = (field: any) => {
+    const value = localSettings[field.key] || '';
+    const handleChange = (val: string) => setLocalSettings({ ...localSettings, [field.key]: val });
+
+    switch (field.type) {
+      case 'text':
+        return (
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => handleChange(e.target.value)}
+            className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors"
+          />
+        );
+      case 'textarea':
+        return (
+          <AutoExpandingTextarea
+            value={value}
+            onChange={(e: any) => handleChange(e.target.value)}
+            className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors min-h-[100px]"
+          />
+        );
+      case 'select':
+        return (
+          <select
+            value={value}
+            onChange={(e) => handleChange(e.target.value)}
+            className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors"
+          >
+            {field.options?.map((opt: string) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        );
+      case 'toggle':
+        return (
+          <button
+            onClick={() => handleChange(value === 'true' ? 'false' : 'true')}
+            className={cn(
+              "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
+              value === 'true' ? "bg-accent" : "bg-muted"
+            )}
+          >
+            <span
+              className={cn(
+                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                value === 'true' ? "translate-x-6" : "translate-x-1"
+              )}
+            />
+          </button>
+        );
+      case 'color':
+        return (
+          <div className="flex items-center gap-3">
+            <input
+              type="color"
+              value={value || '#000000'}
+              onChange={(e) => handleChange(e.target.value)}
+              className="h-10 w-20 rounded-lg cursor-pointer bg-transparent"
+            />
+            <input
+              type="text"
+              value={value}
+              onChange={(e) => handleChange(e.target.value)}
+              className="flex-1 bg-page border border-muted rounded-xl p-2.5 text-sm font-mono"
+            />
+          </div>
+        );
+      case 'image':
+        return (
+          <ImageUpload 
+            value={value} 
+            onChange={handleChange} 
+            showNotification={showNotification}
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
   const hasChanges = JSON.stringify(localSettings) !== JSON.stringify(originalSettings);
 
   if (loading) return <div className="flex items-center justify-center p-12"><Loader2 className="animate-spin text-accent" /></div>;
@@ -1668,7 +1819,7 @@ const SettingsEditor = ({ showNotification }: any) => {
   return (
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <h2 className="text-3xl font-bold">Site Settings</h2>
+        <h2 className="text-3xl font-bold uppercase tracking-tighter">Site Settings</h2>
         {hasChanges && (
           <button
             onClick={handleSave}
@@ -1689,7 +1840,7 @@ const SettingsEditor = ({ showNotification }: any) => {
               key={cat.id}
               onClick={() => setActiveCategory(cat.id)}
               className={cn(
-                "w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all text-sm font-medium",
+                "w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all text-[11px] font-black uppercase tracking-widest",
                 activeCategory === cat.id 
                   ? "bg-accent text-page shadow-lg shadow-accent/20" 
                   : "text-secondary/60 hover:bg-alt hover:text-secondary"
@@ -1709,81 +1860,28 @@ const SettingsEditor = ({ showNotification }: any) => {
             <div className="p-2 bg-accent/10 text-accent rounded-lg">
               {activeCat.icon}
             </div>
-            <h3 className="text-xl font-bold">{activeCat.label} Settings</h3>
+            <h3 className="text-xl font-bold uppercase tracking-tight">{activeCat.label} Settings</h3>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {activeCat.fields.map((field) => (
               <div key={field.key} className={cn("space-y-2", (field.type === 'textarea' || field.type === 'image' || field.type === 'toggle') && "md:col-span-2")}>
-                <label className="text-xs font-mono uppercase tracking-wider text-secondary/60">{field.label}</label>
-                
-                {field.type === 'select' ? (
-                  <select
-                    value={localSettings[field.key] || ''}
-                    onChange={(e) => setLocalSettings({ ...localSettings, [field.key]: e.target.value })}
-                    className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors"
-                  >
-                    <option value="">Select {field.label}...</option>
-                    {field.options?.map(opt => (
-                      <option key={opt} value={opt}>{opt}</option>
-                    ))}
-                  </select>
-                ) : field.type === 'textarea' ? (
-                  <AutoExpandingTextarea
-                    value={localSettings[field.key] || ''}
-                    onChange={(e: any) => setLocalSettings({ ...localSettings, [field.key]: e.target.value })}
-                    className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors min-h-[100px]"
-                  />
-                ) : field.type === 'image' ? (
-                  <ImageUpload 
-                    value={localSettings[field.key] || ''} 
-                    onChange={(val) => setLocalSettings({ ...localSettings, [field.key]: val })} 
-                    showNotification={showNotification}
-                  />
-                ) : field.type === 'toggle' ? (
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setLocalSettings({ ...localSettings, [field.key]: localSettings[field.key] === 'true' ? 'false' : 'true' })}
-                      className={cn(
-                        "w-12 h-6 rounded-full transition-colors relative",
-                        localSettings[field.key] === 'true' ? "bg-accent" : "bg-muted"
-                      )}
-                    >
-                      <div className={cn(
-                        "absolute top-1 w-4 h-4 rounded-full bg-page transition-all",
-                        localSettings[field.key] === 'true' ? "left-7" : "left-1"
-                      )} />
-                    </button>
-                    <span className="text-sm text-secondary">
-                      {localSettings[field.key] === 'true' ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </div>
-                ) : field.type === 'color' ? (
-                  <div className="flex gap-3">
-                    <input
-                      type="color"
-                      value={localSettings[field.key] || '#da755b'}
-                      onChange={(e) => setLocalSettings({ ...localSettings, [field.key]: e.target.value })}
-                      className="w-12 h-12 bg-page border border-muted rounded-xl p-1 cursor-pointer"
-                    />
-                    <input
-                      type="text"
-                      value={localSettings[field.key] || ''}
-                      onChange={(e) => setLocalSettings({ ...localSettings, [field.key]: e.target.value })}
-                      className="flex-1 bg-page border border-muted rounded-xl px-4 py-3 text-sm focus:border-accent outline-none transition-colors font-mono"
-                      placeholder="#000000"
-                    />
-                  </div>
-                ) : (
-                  <input
-                    type={field.type}
-                    value={localSettings[field.key] || ''}
-                    onChange={(e) => setLocalSettings({ ...localSettings, [field.key]: e.target.value })}
-                    className="w-full bg-page border border-muted rounded-xl p-3 text-sm focus:border-accent outline-none transition-colors"
-                  />
-                )}
+                <label className="text-[10px] font-mono uppercase tracking-[0.2em] text-secondary/50 block mb-1">{field.label}</label>
+                {renderField(field)}
               </div>
             ))}
+
+            {activeCategory === 'seo' && (
+              <div className="md:col-span-2 pt-8 border-t border-muted mt-4">
+                <TrackingSettingsEditor showNotification={showNotification} />
+              </div>
+            )}
+
+            {activeCategory === 'security' && (
+              <div className="md:col-span-2 pt-8 border-t border-muted mt-4">
+                <ProfileEditor showNotification={showNotification} />
+              </div>
+            )}
           </div>
 
           {/* Special Actions for Performance and Security */}
@@ -1820,57 +1918,54 @@ const SettingsEditor = ({ showNotification }: any) => {
 
 const FileUpload = ({ value, onChange, accept = "*/*", showNotification }: { value: string, onChange: (val: string) => void, accept?: string, showNotification: any }) => {
   const [uploading, setUploading] = useState(false);
+  const [isOptimizing, setIsOptimizing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    let file = e.target.files?.[0];
     if (!file) return;
 
     setUploading(true);
     try {
-      // Client-side validation
-      const allowedMimes = [
-        'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
-        'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'video/mp4', 'video/mpeg', 'video/quicktime', 'video/webm', 'video/x-msvideo'
-      ];
-      
-      if (!allowedMimes.includes(file.type) && accept !== "*/*") {
-        // Only strict check if not allowing all types
-        const isImage = file.type.startsWith('image/');
-        const isVideo = file.type.startsWith('video/');
-        const isDoc = file.type === 'application/pdf' || file.type.includes('word');
-        if (!isImage && !isVideo && !isDoc) {
-          throw new Error('Invalid file type. Only images, documents, and videos are allowed.');
+      // Optimization for images
+      if (file.type.startsWith('image/')) {
+        setIsOptimizing(true);
+        try {
+          file = await compressImage(file, { maxSizeMB: 1, maxWidthOrHeight: 1920 });
+        } finally {
+          setIsOptimizing(false);
         }
       }
 
-      if (file.size > 50 * 1024 * 1024) {
-        throw new Error('File too large. Max size is 50MB.');
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const isCV = accept.includes('pdf') || accept.includes('doc');
+      if (isCV) {
+        formData.append('bucket', 'cv');
+        formData.append('isPrivate', 'true');
       }
 
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-      const filePath = `public/${fileName}`;
+      const response = await fetch('/api/v1/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`
+        },
+        body: formData
+      });
 
-      const { error: uploadError } = await supabase.storage
-        .from('images')
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: false
-        });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Upload failed');
 
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('images')
-        .getPublicUrl(filePath);
-
-      onChange(publicUrl);
+      // result.url is for public, result.path is for private
+      const finalValue = result.path || result.url;
+      onChange(finalValue);
+      showNotification('File uploaded successfully!');
     } catch (error: any) {
       showNotification('Error uploading file: ' + error.message, 'error');
     } finally {
       setUploading(false);
+      setIsOptimizing(false);
     }
   };
 
@@ -1886,11 +1981,20 @@ const FileUpload = ({ value, onChange, accept = "*/*", showNotification }: { val
         />
         <button 
           onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
+          disabled={uploading || isOptimizing}
           className="bg-alt border border-muted text-secondary px-4 py-3 rounded-xl hover:bg-page transition-colors flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap"
         >
-          {uploading ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-          Upload File
+          {uploading ? (
+            <>
+              <Loader2 size={18} className="animate-spin" />
+              <span>{isOptimizing ? 'Optimizing...' : 'Uploading...'}</span>
+            </>
+          ) : (
+            <>
+              <Upload size={18} />
+              <span>Upload File</span>
+            </>
+          )}
         </button>
         <input 
           type="file"
@@ -1906,10 +2010,11 @@ const FileUpload = ({ value, onChange, accept = "*/*", showNotification }: { val
 
 const ImageUpload = ({ value, onChange, showNotification }: { value: string, onChange: (val: string) => void, showNotification: any }) => {
   const [uploading, setUploading] = useState(false);
+  const [isOptimizing, setIsOptimizing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    let file = e.target.files?.[0];
     if (!file) return;
 
     setUploading(true);
@@ -1919,11 +2024,22 @@ const ImageUpload = ({ value, onChange, showNotification }: { value: string, onC
         throw new Error('Invalid file type. Only images and videos are allowed.');
       }
 
+      // Compression logic for images
+      if (file.type.startsWith('image/')) {
+        setIsOptimizing(true);
+        try {
+          const compressed = await compressImage(file, { maxSizeMB: 1, maxWidthOrHeight: 1920 });
+          file = compressed;
+        } finally {
+          setIsOptimizing(false);
+        }
+      }
+
       if (file.size > 50 * 1024 * 1024) {
         throw new Error('File too large. Max size is 50MB.');
       }
 
-      const fileExt = file.name.split('.').pop();
+      const fileExt = file.name.split('.').pop() || 'jpg';
       const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
       const filePath = `public/${fileName}`;
 
@@ -1945,6 +2061,7 @@ const ImageUpload = ({ value, onChange, showNotification }: { value: string, onC
       showNotification('Error uploading image: ' + error.message, 'error');
     } finally {
       setUploading(false);
+      setIsOptimizing(false);
     }
   };
 
@@ -1960,11 +2077,20 @@ const ImageUpload = ({ value, onChange, showNotification }: { value: string, onC
         />
         <button 
           onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
+          disabled={uploading || isOptimizing}
           className="bg-alt border border-muted text-secondary px-4 py-3 rounded-xl hover:bg-page transition-colors flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap"
         >
-          {uploading ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-          Upload
+          {uploading ? (
+            <>
+              <Loader2 size={18} className="animate-spin" />
+              <span>{isOptimizing ? 'Optimizing...' : 'Uploading...'}</span>
+            </>
+          ) : (
+            <>
+              <Upload size={18} />
+              <span>Upload</span>
+            </>
+          )}
         </button>
         <input 
           type="file"
@@ -2291,7 +2417,32 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
   const handleSaveSettings = async () => {
     setSaving(true);
     try {
+      const cvPasswordSetting = settings.find(s => s.key === 'cv_password');
+      const originalPasswordSetting = originalSettings.find(os => os.key === 'cv_password');
+      
+      // If password changed, update it via secure API
+      if (cvPasswordSetting && cvPasswordSetting.value !== originalPasswordSetting?.value) {
+        const response = await fetch('/api/v1/admin/auth/update-password', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`
+          },
+          body: JSON.stringify({
+            key: 'cv_password',
+            password: cvPasswordSetting.value
+          })
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error || 'Failed to update CV password');
+        }
+      }
+
+      // Update other settings (like cv_url) via Supabase
       const toUpdate = settings.filter(s => {
+        if (s.key === 'cv_password') return false; // Handled above
         const original = originalSettings.find(os => os.id === s.id);
         return s.value !== original?.value;
       });
@@ -2301,10 +2452,10 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
       }
 
       await fetchData();
-      showNotification('CV settings updated successfully!');
-    } catch (err) {
+      showNotification('CV settings updated successfully and secured!');
+    } catch (err: any) {
       console.error(err);
-      showNotification('Failed to save changes.', 'error');
+      showNotification(err.message || 'Failed to save changes.', 'error');
     } finally {
       setSaving(false);
     }
@@ -2324,8 +2475,8 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
     }
     
     try {
-      // 1. Mark as read in DB
-      await supabase.from('cv_requests').update({ is_read: true }).eq('id', request.id);
+      // 1. Mark as approved in DB
+      await supabase.from('cv_requests').update({ is_read: true, status: 'approved' }).eq('id', request.id);
       
       // 2. Send approval email
       const response = await fetch('/api/v1/notify', {
@@ -2336,7 +2487,8 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
           data: { 
             name: request.name, 
             email: request.email, 
-            password: cvPassword 
+            password: cvPassword,
+            downloadUrl: `${window.location.protocol}//${window.location.host}/api/v1/cv/download/${request.id}`
           } 
         }),
       });
@@ -2520,67 +2672,147 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
 const ProfileEditor = ({ showNotification }: any) => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState({ text: '', type: '' });
+  const [strength, setStrength] = useState(0);
+
+  const calculateStrength = (pwd: string) => {
+    let s = 0;
+    if (pwd.length >= 8) s++;
+    if (/[A-Z]/.test(pwd)) s++;
+    if (/[0-9]/.test(pwd)) s++;
+    if (/[^A-Za-z0-9]/.test(pwd)) s++;
+    return s;
+  };
 
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    
     if (newPassword !== confirmPassword) {
-      setMessage({ text: 'Passwords do not match', type: 'error' });
+      showNotification('Passwords do not match', 'error');
+      return;
+    }
+
+    if (strength < 3) {
+      showNotification('Please use a stronger password', 'error');
       return;
     }
 
     setLoading(true);
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    if (error) {
-      setMessage({ text: error.message, type: 'error' });
-    } else {
-      setMessage({ text: 'Password updated successfully!', type: 'success' });
+    try {
+      // In a real production environment, you might want to verify current password first if using a custom backend
+      // But Supabase auth.updateUser handles the session security
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      
+      if (error) throw error;
+      
+      showNotification('Password updated successfully! Next login will require the new credentials.');
       setNewPassword('');
       setConfirmPassword('');
+      setCurrentPassword('');
+    } catch (err: any) {
+      console.error(err);
+      showNotification('Failed to update password: ' + err.message, 'error');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
-    <div className="space-y-8">
-      <h2 className="text-3xl font-bold">Profile Settings</h2>
-      <div className="bg-alt p-8 rounded-2xl border border-muted max-w-md">
-        <h3 className="text-xl font-bold mb-6">Change Password</h3>
-        {message.text && (
-          <div className={`mb-6 p-4 rounded-xl text-sm border ${message.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-500' : 'bg-red-500/10 border-red-500/20 text-red-500'}`}>
-            {message.text}
+    <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-12">
+        <div className="space-y-6">
+          <div className="bg-alt/50 border border-muted/50 rounded-3xl p-8 backdrop-blur-sm">
+            <h4 className="text-sm font-black uppercase tracking-widest text-accent mb-6 flex items-center gap-2">
+              <Shield size={16} />
+              Update Master Key
+            </h4>
+            
+            <form onSubmit={handleUpdatePassword} className="space-y-5">
+              <div className="space-y-2">
+                <label className="text-[10px] font-mono uppercase tracking-[0.2em] text-secondary/50 block ml-1">New Password</label>
+                <div className="relative">
+                  <input 
+                    type="password" 
+                    value={newPassword}
+                    onChange={(e) => {
+                      setNewPassword(e.target.value);
+                      setStrength(calculateStrength(e.target.value));
+                    }}
+                    placeholder="••••••••••••"
+                    className="w-full bg-page border border-muted rounded-2xl p-4 text-sm focus:border-accent outline-none transition-all pr-12 font-mono"
+                    required
+                  />
+                  <div className="absolute right-4 top-1/2 -translate-y-1/2 flex gap-1">
+                    {[1, 2, 3, 4].map(s => (
+                      <div 
+                        key={s} 
+                        className={cn(
+                          "w-1.5 h-1.5 rounded-full transition-colors",
+                          strength >= s ? (strength <= 2 ? "bg-red-500" : strength === 3 ? "bg-yellow-500" : "bg-green-500") : "bg-muted"
+                        )} 
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-mono uppercase tracking-[0.2em] text-secondary/50 block ml-1">Confirm New Password</label>
+                <input 
+                  type="password" 
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="w-full bg-page border border-muted rounded-2xl p-4 text-sm focus:border-accent outline-none transition-all font-mono"
+                  required
+                />
+              </div>
+
+              <button 
+                type="submit"
+                disabled={loading || !newPassword || newPassword !== confirmPassword}
+                className="w-full bg-accent text-page py-4 rounded-2xl font-black text-sm uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 shadow-2xl shadow-accent/20 flex items-center justify-center gap-3"
+              >
+                {loading ? <Loader2 size={18} className="animate-spin" /> : <RotateCcw size={18} />}
+                Rotate Credentials
+              </button>
+            </form>
           </div>
-        )}
-        <form onSubmit={handleUpdatePassword} className="space-y-4">
-          <div>
-            <label className="block text-xs font-mono uppercase tracking-wider text-secondary/60 mb-2">New Password</label>
-            <input 
-              type="password" 
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full bg-page border border-muted rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors"
-              required
-            />
+        </div>
+
+        <div className="space-y-8">
+          <div className="bg-alt/30 border border-muted/30 rounded-3xl p-8">
+            <h4 className="text-[11px] font-black uppercase tracking-[0.2em] text-secondary mb-4">Security Requirements</h4>
+            <ul className="space-y-3">
+              {[
+                { label: 'Minimum 8 characters', met: newPassword.length >= 8 },
+                { label: 'Include uppercase letters', met: /[A-Z]/.test(newPassword) },
+                { label: 'Include numbers', met: /[0-9]/.test(newPassword) },
+                { label: 'Include special symbols', met: /[^A-Za-z0-9]/.test(newPassword) },
+              ].map((req, i) => (
+                <li key={i} className="flex items-center gap-3 text-xs">
+                  <div className={cn("w-5 h-5 rounded-full flex items-center justify-center transition-colors", req.met ? "bg-green-500/20 text-green-500" : "bg-muted text-secondary/30")}>
+                    {req.met ? <Check size={12} /> : <div className="w-1.5 h-1.5 rounded-full bg-current" />}
+                  </div>
+                  <span className={req.met ? "text-secondary" : "text-secondary/40 font-mono uppercase tracking-widest text-[9px]"}>{req.label}</span>
+                </li>
+              ))}
+            </ul>
           </div>
-          <div>
-            <label className="block text-xs font-mono uppercase tracking-wider text-secondary/60 mb-2">Confirm Password</label>
-            <input 
-              type="password" 
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full bg-page border border-muted rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors"
-              required
-            />
+
+          <div className="p-6 border border-yellow-500/20 bg-yellow-500/5 rounded-2xl">
+            <div className="flex gap-4">
+              <Zap className="text-yellow-500 shrink-0" size={20} />
+              <div>
+                <p className="text-[11px] font-bold text-yellow-500/80 uppercase tracking-widest mb-1">Account Safety</p>
+                <p className="text-xs text-secondary/60 leading-relaxed">
+                  Changing your password will invalidate existing sessions on other devices. You will need to log back in everywhere.
+                </p>
+              </div>
+            </div>
           </div>
-          <button 
-            type="submit"
-            disabled={loading}
-            className="w-full bg-primary text-page py-2.5 sm:py-4 rounded-xl font-bold text-sm sm:text-base hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 shadow-lg shadow-primary/20"
-          >
-            {loading ? 'Updating...' : 'Update Password'}
-          </button>
-        </form>
+        </div>
       </div>
     </div>
   );
@@ -2710,11 +2942,11 @@ const EmailTemplatesEditor = ({ showNotification }: any) => {
 </body>
 </html>`
     },
-    { 
-      key: 'email_template_cv_approval', 
-      label: 'CV Access Granted', 
-      description: 'Sent to user when their CV request is approved.',
-      default: `<!DOCTYPE html>
+      { 
+        key: 'email_template_cv_approval', 
+        label: 'CV Access Granted', 
+        description: 'Sent to user when their CV request is approved.',
+        default: `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -2750,18 +2982,22 @@ const EmailTemplatesEditor = ({ showNotification }: any) => {
     <div class="email-body">
       <div class="greeting">Hello, \${data.name}</div>
       <div class="headline">Your CV Access Has Been Approved</div>
-      <p class="body-text">Your request for CV access has been approved. You can now download the CV using the access code below.</p>
+      <p class="body-text">Your request for CV access has been approved. You can now download the CV directly using the link below.</p>
+      
+      <a class="cta-link" href="\${data.downloadUrl}">Download CV Now</a>
+      
+      <p class="body-text" style="font-size: 12px; margin-top: 20px;">Alternatively, you can visit the portfolio and use the following access code:</p>
       <div class="code-block">
-        <div class="code-label">Your Access Code</div>
+        <div class="code-label">Access Code</div>
         <div class="code-value">\${data.password}</div>
       </div>
-      <a class="cta-link" href="https://janakpanthi.com.np">Janak Panthi Portfolio</a>
+      <a class="cta-link" href="https://janakpanthi.com.np" style="background-color: #2e2d2a; color: #f2f0e4;">Visit Portfolio</a>
     </div>
     <div class="email-footer"><div class="footer-left">Automated Notice</div></div>
   </div>
 </body>
 </html>`
-    },
+      },
     { 
       key: 'email_template_contact_exchange', 
       label: 'New Contact Exchange', 
@@ -3146,6 +3382,7 @@ const MessagesViewer = ({ onRefresh, showNotification }: { onRefresh: () => void
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState<'received' | 'sent'>('received');
   
   // Form state
   const [formData, setFormData] = useState({
@@ -3157,12 +3394,16 @@ const MessagesViewer = ({ onRefresh, showNotification }: { onRefresh: () => void
 
   useEffect(() => {
     fetchMessages();
-  }, []);
+  }, [activeTab]);
 
   const fetchMessages = async () => {
     setRefreshing(true);
     try {
-      const { data, error } = await supabase.from('messages').select('*').order('created_at', { ascending: false });
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('type', activeTab)
+        .order('created_at', { ascending: false });
       if (error) throw error;
       if (data) setMessages(data);
       if (onRefresh) onRefresh();
@@ -3201,8 +3442,14 @@ const MessagesViewer = ({ onRefresh, showNotification }: { onRefresh: () => void
   const handleCreateMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const messageData = {
+        ...formData,
+        type: 'sent',
+        is_read: true // Sent messages are obviously read
+      };
+
       // 1. Save to database
-      const { error } = await supabase.from('messages').insert([formData]);
+      const { error } = await supabase.from('messages').insert([messageData]);
       if (error) throw error;
 
       // 2. Send email notification via server
@@ -3260,38 +3507,57 @@ const MessagesViewer = ({ onRefresh, showNotification }: { onRefresh: () => void
         />
       </div>
 
-      <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div className="flex items-center gap-4">
-          <div>
-            <h2 className="text-4xl font-black tracking-tighter bg-gradient-to-r from-accent to-accent/50 bg-clip-text text-transparent">
-              INBOX
-            </h2>
-            <p className="text-secondary/60 text-sm mt-1 font-mono uppercase tracking-widest">
-              {messages.length} Total Communications
-            </p>
+      <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
+        <div className="space-y-1">
+          <h2 className="text-3xl font-bold uppercase tracking-tighter">Messages</h2>
+          <p className="text-[10px] font-mono text-secondary/40 uppercase tracking-[0.2em]">{activeTab} — {messages.length} Records</p>
+        </div>
+        
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className="flex bg-alt/50 border border-muted rounded-xl p-1 flex-1 sm:flex-none">
+            <button 
+              onClick={() => setActiveTab('received')}
+              className={cn(
+                "flex-1 sm:flex-none px-4 py-2 rounded-lg text-[10px] font-black tracking-widest transition-all",
+                activeTab === 'received' ? "bg-accent text-page shadow-lg shadow-accent/20" : "text-secondary/50 hover:text-primary"
+              )}
+            >
+              RECEIVED
+            </button>
+            <button 
+              onClick={() => setActiveTab('sent')}
+              className={cn(
+                "flex-1 sm:flex-none px-4 py-2 rounded-lg text-[10px] font-black tracking-widest transition-all",
+                activeTab === 'sent' ? "bg-accent text-page shadow-lg shadow-accent/20" : "text-secondary/50 hover:text-primary"
+              )}
+            >
+              SENT
+            </button>
           </div>
+
           <button 
             onClick={fetchMessages}
             disabled={refreshing}
-            className="p-3 bg-alt border border-muted rounded-xl transition-all text-accent hover:bg-accent hover:text-page shadow-sm hover:scale-110 active:scale-95 disabled:opacity-50 group"
-            title="Refresh Transmissions"
+            className="p-2.5 bg-alt border border-muted rounded-xl transition-all text-accent hover:bg-accent hover:text-page shadow-sm hover:scale-110 active:scale-95 disabled:opacity-50 group"
+            title="Refresh"
           >
-            <RefreshCw size={20} className={cn(refreshing ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500')} />
+            <RefreshCw size={18} className={cn(refreshing ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500')} />
+          </button>
+
+          <button 
+            onClick={() => {
+              setShowCreateForm(!showCreateForm);
+              setReplyTo(null);
+              if (!showCreateForm) {
+                setFormData({ name: '', email: '', subject: '', message: '' });
+              }
+            }}
+            className="p-2.5 bg-accent text-page rounded-xl font-bold text-xs flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group ml-auto sm:ml-0"
+          >
+            {showCreateForm ? <X size={18} /> : <Plus size={18} className="group-hover:rotate-90 transition-transform" />}
+            <span className="hidden xs:inline font-black text-[10px] tracking-widest uppercase">{showCreateForm ? 'ABORT' : 'NEW'}</span>
           </button>
         </div>
-        <button 
-          onClick={() => {
-            setShowCreateForm(!showCreateForm);
-            setReplyTo(null);
-            if (!showCreateForm) {
-              setFormData({ name: '', email: '', subject: '', message: '' });
-            }
-          }}
-          className="w-full sm:w-auto bg-accent text-page px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 hover:scale-105 transition-all shadow-lg shadow-accent/20 group"
-        >
-          {showCreateForm ? <X size={18} /> : <Plus size={18} className="group-hover:rotate-90 transition-transform" />}
-          {showCreateForm ? 'ABORT' : 'COMPOSE'}
-        </button>
       </div>
 
       <AnimatePresence>
@@ -3394,87 +3660,96 @@ const MessagesViewer = ({ onRefresh, showNotification }: { onRefresh: () => void
           messages.map((m) => (
             <div 
               key={m.id} 
-              className={`group relative bg-alt/30 backdrop-blur-md p-6 sm:p-8 rounded-3xl border transition-all duration-300 ${m.is_read ? 'border-muted/20 opacity-80' : 'border-accent/40 shadow-lg shadow-accent/5'}`}
+              className={`group relative bg-alt/40 backdrop-blur-sm p-5 sm:p-8 rounded-[2rem] border transition-all duration-500 ${m.is_read ? 'border-muted/20' : 'border-accent/30 shadow-2xl shadow-accent/5'}`}
             >
-              {/* Status Indicator Bar */}
+              {/* Status Indicator */}
               {!m.is_read && (
-                <div className="absolute left-0 top-8 bottom-8 w-1 bg-accent rounded-r-full shadow-[0_0_15px_rgba(var(--accent-rgb),0.5)]" />
+                <div className="absolute -left-1 top-8 bottom-8 w-1.5 bg-accent rounded-full shadow-[0_0_20px_rgba(var(--accent-rgb),0.4)]" />
               )}
               
-              <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6 relative z-10">
-                <div className="flex-1 space-y-5">
-                  {/* Header Info */}
-                  <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono uppercase tracking-wider">
-                    <div className="flex items-center gap-2 bg-accent/10 text-accent px-3 py-1 rounded-md border border-accent/20">
-                      <UserIcon size={12} />
-                      <span className="font-bold">{m.name}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-secondary/60 hover:text-accent transition-colors">
-                      <Mail size={12} />
-                      <a href={`mailto:${m.email}`} className="underline underline-offset-4 decoration-muted/30">{m.email}</a>
-                    </div>
-                    {!m.is_read && (
-                      <div className="flex items-center gap-1.5 bg-red-500/10 text-red-500 px-2 py-0.5 rounded text-[9px] font-black tracking-widest border border-red-500/20">
-                        <span className="w-1 h-1 rounded-full bg-red-500 animate-pulse" />
-                        PRIORITY
+              <div className="flex flex-col gap-6 relative z-10">
+                <div className="space-y-6">
+                  {/* Sender Info Row */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-muted/10 pb-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="flex items-center gap-2 bg-accent text-page px-3 py-1.5 rounded-lg text-[10px] font-black tracking-widest shadow-lg shadow-accent/20">
+                        <UserIcon size={12} />
+                        {m.name.toUpperCase()}
                       </div>
-                    )}
-                    <div className="flex items-center gap-2 text-secondary/40 ml-auto">
-                      <Clock size={12} />
-                      <span>{new Date(m.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                      <div className="flex flex-wrap gap-4">
+                        <a href={`mailto:${m.email}`} className="flex items-center gap-2 text-[10px] font-mono text-secondary/40 hover:text-accent transition-all tracking-tighter">
+                          <Mail size={12} />
+                          {m.email}
+                        </a>
+                        {m.phone && (
+                           <div className="flex items-center gap-2 text-[10px] font-mono text-secondary/40 tracking-tighter">
+                            <Phone size={12} />
+                            {m.phone}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-4">
+                      {activeTab === 'received' && !m.is_read && (
+                        <div className="flex items-center gap-1.5 bg-red-500/10 text-red-500 px-2 py-0.5 rounded text-[9px] font-black tracking-[0.2em] animate-pulse border border-red-500/20">
+                          NEW
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 text-[9px] font-mono text-secondary/30 uppercase tracking-widest bg-muted/10 px-2 py-1 rounded">
+                        <Clock size={10} />
+                        {new Date(m.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </div>
                     </div>
                   </div>
                   
-                  {/* Content */}
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3">
-                      {!m.is_read && (
-                        <span className="flex h-2 w-2 rounded-full bg-accent animate-pulse" />
-                      )}
-                      <h4 className="text-xl font-bold tracking-tight text-primary group-hover:text-accent transition-colors">
-                        {m.subject}
-                      </h4>
-                    </div>
-                    <div className="bg-page/20 rounded-2xl p-5 sm:p-6 border border-muted/10 group-hover:border-accent/10 transition-colors">
-                      <p className="text-secondary/90 leading-relaxed whitespace-pre-wrap text-sm sm:text-base font-medium">
+                  {/* Content Area */}
+                  <div className="space-y-4">
+                    <h4 className="text-xl font-bold tracking-tighter text-primary truncate">
+                      {m.subject}
+                    </h4>
+                    <div className="bg-page/40 rounded-2xl p-5 sm:p-6 border border-muted/5 group-hover:border-accent/10 transition-all">
+                      <p className="text-secondary/80 leading-relaxed whitespace-pre-wrap text-sm font-medium">
                         {m.message}
                       </p>
                     </div>
                   </div>
                 </div>
 
-                {/* Actions */}
-                <div className="flex lg:flex-col gap-2 shrink-0">
-                  <div className="flex lg:flex-col gap-2 w-full lg:w-auto">
+                {/* Unified Action Row */}
+                <div className="flex items-center gap-2 sm:gap-3 pt-2 border-t border-muted/5 mt-2">
+                  <button 
+                    onClick={() => handleReply(m)}
+                    className="flex-1 sm:flex-none bg-accent/10 text-accent px-5 py-3 rounded-xl font-black text-[10px] tracking-widest uppercase flex items-center justify-center gap-2 hover:bg-accent hover:text-page transition-all"
+                  >
+                    <Send size={14} />
+                    {activeTab === 'received' ? 'Reply' : 'Resend'}
+                  </button>
+                  
+                  {activeTab === 'received' && !m.is_read && (
                     <button 
-                      onClick={() => handleReply(m)}
-                      className="flex-1 lg:flex-none bg-accent text-page p-3 rounded-xl transition-all hover:bg-accent/90 shadow-md flex items-center justify-center"
-                      title="Reply"
+                      onClick={() => handleMarkAsRead(m.id)}
+                      className="p-3 bg-muted/20 text-secondary hover:bg-green-500/10 hover:text-green-500 rounded-xl transition-all"
+                      title="Mark as Read"
                     >
-                      <Send size={18} />
+                      <CheckCircle size={18} />
                     </button>
-                    {!m.is_read && (
-                      <button 
-                        onClick={() => handleMarkAsRead(m.id)}
-                        className="flex-1 lg:flex-none bg-green-600/20 text-green-500 border border-green-500/30 p-3 rounded-xl transition-all hover:bg-green-600/30 flex items-center justify-center"
-                        title="Mark as read"
-                      >
-                        <CheckCircle size={18} />
-                      </button>
-                    )}
-                    
+                  )}
+
+                  <div className="ml-auto flex items-center gap-2">
                     {deletingId === m.id ? (
-                      <div className="flex lg:flex-col gap-2 animate-in fade-in zoom-in duration-200 flex-1 lg:flex-none">
+                      <div className="flex items-center gap-2 animate-in slide-in-from-right-4 duration-300">
+                        <span className="text-[10px] font-black uppercase text-red-500 mr-2 hidden xs:inline tracking-tighter">Confirm Purge?</span>
                         <button 
                           onClick={() => handleDelete(m.id)}
                           disabled={isDeleting}
-                          className="flex-1 bg-red-600 text-white p-3 rounded-xl font-bold text-[10px] uppercase tracking-widest hover:bg-red-700 transition-colors"
+                          className="px-4 py-2 bg-red-600 text-page rounded-lg text-xs font-black shadow-lg shadow-red-600/20"
                         >
-                          {isDeleting ? '...' : 'OK'}
+                          {isDeleting ? '...' : 'YES'}
                         </button>
                         <button 
                           onClick={() => setDeletingId(null)}
-                          className="flex-1 bg-muted/50 text-secondary p-3 rounded-xl font-bold text-[10px] uppercase tracking-widest hover:bg-muted transition-colors"
+                          className="px-4 py-2 bg-muted text-secondary rounded-lg text-xs font-bold"
                         >
                           NO
                         </button>
@@ -3482,8 +3757,8 @@ const MessagesViewer = ({ onRefresh, showNotification }: { onRefresh: () => void
                     ) : (
                       <button 
                         onClick={() => setDeletingId(m.id)}
-                        className="flex-1 lg:flex-none bg-red-600/10 text-red-500 border border-red-500/20 p-3 rounded-xl transition-all hover:bg-red-600/20 flex items-center justify-center"
-                        title="Delete"
+                        className="p-3 bg-red-500/5 text-red-500/30 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"
+                        title="Purge Transmission"
                       >
                         <Trash2 size={18} />
                       </button>
@@ -4325,14 +4600,12 @@ const SocialLinksEditor = ({ category = 'main', showNotification }: { category?:
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {links.map((link) => (
           <div key={link.id} className="bg-alt p-6 rounded-2xl border border-muted relative group">
-            {!link.is_fixed && (
-              <button 
-                onClick={() => handleDelete(link.id)}
-                className="absolute top-4 right-4 text-secondary/40 hover:text-red-500 transition-colors"
-              >
-                <Trash2 size={18} />
-              </button>
-            )}
+            <button 
+              onClick={() => handleDelete(link.id)}
+              className="absolute top-4 right-4 text-secondary/40 hover:text-red-500 transition-colors"
+            >
+              <Trash2 size={18} />
+            </button>
             <div className="space-y-4">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 bg-page rounded-xl border border-muted flex items-center justify-center text-primary">

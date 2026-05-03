@@ -16,11 +16,11 @@ function cn(...inputs: ClassValue[]) {
 interface NoteCell {
   id: string;
   content: string;
-  password?: string;
+  isLocked: boolean;
   createdAt: number;
 }
 
-const Notepad = () => {
+const Notepad = ({ showNotification }: { showNotification?: (msg: string, type?: 'success' | 'error' | 'info') => void }) => {
   const [cells, setCells] = useState<NoteCell[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -39,24 +39,22 @@ const Notepad = () => {
   const fetchNotes = async () => {
     setLoading(true);
     try {
+      // Only unlocked notes or notes the user has session for are fetched by public RLS
       const { data, error } = await supabase
-        .from('site_settings')
-        .select('value')
-        .eq('key', 'public_notepad_data')
-        .single();
+        .from('notes')
+        .select('id, content, is_locked, created_at, order_index')
+        .order('order_index', { ascending: true })
+        .order('created_at', { ascending: sortOrder === 'asc' });
       
-      if (error && error.code !== 'PGRST116') throw error;
+      if (error) throw error;
       
-      if (data && data.value) {
-        const parsed = JSON.parse(data.value);
-        // Migrate existing notes to have createdAt if missing
-        const migrated = parsed.map((c: any, index: number) => ({
-          ...c,
-          createdAt: c.createdAt || (Date.now() - (parsed.length - index) * 1000)
-        }));
-        setCells(migrated);
-      } else {
-        setCells([{ id: crypto.randomUUID(), content: '', createdAt: Date.now() }]);
+      if (data) {
+        setCells(data.map(n => ({
+          id: n.id,
+          content: n.content,
+          isLocked: n.is_locked,
+          createdAt: new Date(n.created_at).getTime()
+        })));
       }
     } catch (err: any) {
       console.error('Error fetching notes:', err);
@@ -65,46 +63,49 @@ const Notepad = () => {
     }
   };
 
-  const saveNotes = async (updatedCells: NoteCell[]) => {
-    setSaving(true);
+  const addCell = async () => {
     try {
-      const { error } = await supabase
-        .from('site_settings')
-        .upsert({ key: 'public_notepad_data', value: JSON.stringify(updatedCells) }, { onConflict: 'key' });
+      const { data, error } = await supabase
+        .from('notes')
+        .insert([{ content: '', is_locked: false }])
+        .select();
       
       if (error) throw error;
-    } catch (err: any) {
-      console.error('Error saving notes:', err);
-    } finally {
-      setSaving(false);
+      if (data) {
+        fetchNotes();
+      }
+    } catch (err) {
+      console.error('Error adding note:', err);
     }
   };
 
-  const addCell = () => {
-    const newCells = [...cells, { id: crypto.randomUUID(), content: '', createdAt: Date.now() }];
-    setCells(newCells);
-    saveNotes(newCells);
+  const updateCell = async (id: string, content: string) => {
+    setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
   };
 
-  const updateCell = (id: string, content: string) => {
-    const newCells = cells.map(c => c.id === id ? { ...c, content } : c);
-    setCells(newCells);
-  };
+  const handleBlur = async (id: string, content: string) => {
+    // Only update if not locked or is unlocked
+    const cell = cells.find(c => c.id === id);
+    if (cell?.isLocked && !unlockedIds.has(id)) return;
 
-  const handleBlur = () => {
-    saveNotes(cells);
-  };
-
-  const deleteCell = (id: string) => {
-    if (cells.length === 1) {
-      const newCells = [{ id: crypto.randomUUID(), content: '', createdAt: Date.now() }];
-      setCells(newCells);
-      saveNotes(newCells);
-      return;
+    try {
+      await supabase.from('notes').update({ content }).eq('id', id);
+    } catch (err) {
+      console.error('Error saving note:', err);
     }
-    const newCells = cells.filter(c => c.id !== id);
-    setCells(newCells);
-    saveNotes(newCells);
+  };
+
+  const deleteCell = async (id: string) => {
+    // Only delete if not locked or is unlocked
+    const cell = cells.find(c => c.id === id);
+    if (cell?.isLocked && !unlockedIds.has(id)) return;
+
+    try {
+      await supabase.from('notes').delete().eq('id', id);
+      setCells(prev => prev.filter(c => c.id !== id));
+    } catch (err) {
+      console.error('Error deleting note:', err);
+    }
   };
 
   const copyToClipboard = (content: string, id: string) => {
@@ -115,11 +116,8 @@ const Notepad = () => {
   };
 
   const clearAll = () => {
-    if (confirm('Are you sure you want to clear all notes?')) {
-      const newCells = [{ id: crypto.randomUUID(), content: '', createdAt: Date.now() }];
-      setCells(newCells);
-      saveNotes(newCells);
-    }
+    // Not implemented for DB version for safety, or implement with cautions
+    showNotification?.('Global clear is disabled for security.', 'info');
   };
 
   const downloadNotes = () => {
@@ -135,27 +133,12 @@ const Notepad = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleSetPassword = (id: string, password: string) => {
-    const newCells = cells.map(c => c.id === id ? { ...c, password: password || undefined } : c);
-    setCells(newCells);
-    saveNotes(newCells);
-    if (password) {
-      setUnlockedIds(prev => {
-        const next = new Set(prev);
-        next.add(id);
-        return next;
-      });
-    }
-    setShowPasswordModal(null);
-    setModalPassword('');
-  };
-
   const handleUnlock = async (id: string, password: string) => {
     try {
       const response = await fetch('/api/v1/auth/verify-notepad', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cellId: id, password })
+        body: JSON.stringify({ id, password })
       });
       
       const result = await response.json();
@@ -166,6 +149,8 @@ const Notepad = () => {
           next.add(id);
           return next;
         });
+        // Update the cell content with the one returned from server
+        setCells(prev => prev.map(c => c.id === id ? { ...c, content: result.content } : c));
         setModalError(false);
         setShowPasswordModal(null);
         setModalPassword('');
@@ -276,7 +261,7 @@ const Notepad = () => {
               .sort((a, b) => sortOrder === 'asc' ? a.createdAt - b.createdAt : b.createdAt - a.createdAt)
               .map((cell, visibleIndex) => {
                 const originalIndex = cells.findIndex(c => c.id === cell.id);
-                const isLocked = cell.password && !unlockedIds.has(cell.id);
+                const isLocked = cell.isLocked && !unlockedIds.has(cell.id);
               
               return (
                 <motion.div
@@ -297,7 +282,7 @@ const Notepad = () => {
                         {String(originalIndex + 1).padStart(2, '0')}
                       </span>
                       <div className="w-px h-full bg-muted/50" />
-                      {cell.password && (
+                      {cell.isLocked && (
                         <Lock size={12} className="text-accent/40" />
                       )}
                     </div>
@@ -330,7 +315,7 @@ const Notepad = () => {
                           <textarea
                             value={cell.content}
                             onChange={(e) => updateCell(cell.id, e.target.value)}
-                            onBlur={handleBlur}
+                            onBlur={() => handleBlur(cell.id, cell.content)}
                             placeholder="Enter your thoughts or paste code here..."
                             className="w-full h-full bg-transparent border-none outline-none resize-none font-body text-lg text-primary placeholder:text-secondary/20 leading-relaxed"
                             spellCheck={false}
@@ -338,19 +323,7 @@ const Notepad = () => {
                           
                           {/* Actions */}
                           <div className="absolute top-4 right-4 md:top-6 md:right-6 flex items-center gap-1.5 md:gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-all md:translate-x-2 md:group-hover:translate-x-0">
-                            <button
-                              onClick={() => setShowPasswordModal({ id: cell.id, type: 'set' })}
-                              className={cn(
-                                "p-2 md:p-2.5 rounded-lg transition-all border",
-                                cell.password 
-                                  ? "bg-accent/10 border-accent/30 text-accent" 
-                                  : "bg-page border-muted text-secondary/40 hover:text-accent hover:border-accent"
-                              )}
-                              title={cell.password ? "Change Password" : "Add Password"}
-                            >
-                              <Shield size={16} className="md:w-[18px] md:h-[18px]" />
-                            </button>
-                            {cell.password && (
+                            {cell.isLocked && !unlockedIds.has(cell.id) ? null : cell.isLocked && (
                               <button
                                 onClick={() => lockCell(cell.id)}
                                 className="p-2 md:p-2.5 rounded-lg bg-page border border-muted text-secondary/40 hover:text-accent hover:border-accent transition-all"
@@ -420,12 +393,10 @@ const Notepad = () => {
                 <div className="space-y-5 md:space-y-6">
                   <div className="space-y-1.5 md:space-y-2">
                     <h3 className="text-xl md:text-2xl font-bold font-headline">
-                      {showPasswordModal.type === 'set' ? 'Set Password' : 'Unlock Block'}
+                      Unlock Block
                     </h3>
                     <p className="text-secondary/60 text-xs md:text-sm">
-                      {showPasswordModal.type === 'set' 
-                        ? 'Protect this block with a password. Leave empty to remove protection.' 
-                        : 'Enter the password to view the content of this block.'}
+                      Enter the password to view the content of this block.
                     </p>
                   </div>
 
@@ -446,8 +417,7 @@ const Notepad = () => {
                         )}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
-                            if (showPasswordModal.type === 'set') handleSetPassword(showPasswordModal.id, modalPassword);
-                            else handleUnlock(showPasswordModal.id, modalPassword);
+                            handleUnlock(showPasswordModal.id, modalPassword);
                           }
                         }}
                       />
@@ -468,12 +438,11 @@ const Notepad = () => {
 
                   <button 
                     onClick={() => {
-                      if (showPasswordModal.type === 'set') handleSetPassword(showPasswordModal.id, modalPassword);
-                      else handleUnlock(showPasswordModal.id, modalPassword);
+                      handleUnlock(showPasswordModal.id, modalPassword);
                     }}
                     className="w-full bg-primary text-page py-3.5 md:py-4 rounded-xl md:rounded-2xl font-bold hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-primary/10 text-sm md:text-base"
                   >
-                    {showPasswordModal.type === 'set' ? 'Save Protection' : 'Unlock Now'}
+                    Unlock Now
                   </button>
                 </div>
               </motion.div>
