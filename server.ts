@@ -208,7 +208,7 @@ const upload = multer({
   },
 });
 
-async function startServer() {
+export async function initApp() {
   const app = express();
   const PORT = 3000;
 
@@ -561,6 +561,36 @@ async function startServer() {
               <p>Best Regards,<br/>Janak Panthi</p>
             </div>
           `;
+        } else if (templateKey === 'email_template_contact') {
+          html = `
+            <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #eee; border-radius: 10px;">
+              <h2 style="color: #da755b;">New Message: \${data.subject}</h2>
+              <p><strong>From:</strong> \${data.name} (\${data.email})</p>
+              <div style="background: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0; white-space: pre-wrap;">
+                \${data.message}
+              </div>
+              <p style="font-size: 12px; color: #999;">Sent from your portfolio contact form.</p>
+            </div>
+          `;
+        } else if (templateKey === 'email_template_cv_request') {
+          html = `
+            <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #eee; border-radius: 10px;">
+              <h2 style="color: #da755b;">CV Request</h2>
+              <p><strong>Name:</strong> \${data.name}</p>
+              <p><strong>Email:</strong> \${data.email}</p>
+              <p><strong>Reason/Company:</strong> \${data.reason || data.company}</p>
+              <p style="font-size: 12px; color: #999;">Login to your admin panel to approve or deny this request.</p>
+            </div>
+          `;
+        } else if (templateKey === 'email_template_todo') {
+          html = `
+            <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #eee; border-radius: 10px;">
+              <h2 style="color: #da755b;">Todo Reminder</h2>
+              <p><strong>Task:</strong> \${data.task}</p>
+              <p><strong>Priority:</strong> \${data.priority}</p>
+              <p><strong>Due Date:</strong> \${data.due_date || 'None'}</p>
+            </div>
+          `;
         } else {
           return; // Still return if it's completely missing and no fallback
         }
@@ -627,6 +657,21 @@ async function startServer() {
       const { password, type } = schemas.passwordVerify.parse(req.body);
       const key = type === 'cv' ? 'cv_password' : 'notepad_password';
       
+      // Special case: cv_password might be in site_settings for visibility
+      if (key === 'cv_password') {
+        const { data: settingsData } = await getSupabase()
+          .from('site_settings')
+          .select('value')
+          .eq('key', 'cv_password')
+          .single();
+        
+        if (settingsData?.value) {
+          if (password === settingsData.value) {
+            return res.json({ valid: true, success: true });
+          }
+        }
+      }
+
       const { data: passwordData, error } = await getSupabase()
         .from('secure_passwords')
         .select('hashed_value, failed_attempts, locked_until')
@@ -778,6 +823,21 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid password key' });
       }
 
+      // If it's CV or Notepad password, also store in site_settings for admin visibility
+      if (key === 'cv_password' || key === 'notepad_password') {
+        await getSupabase()
+          .from('site_settings')
+          .upsert({ 
+            key, 
+            value: password,
+            updated_at: new Date().toISOString(),
+            updated_by: (req as any).user.id 
+          }, { onConflict: 'key' });
+      } else {
+        // Ensure legacy plain text is removed if it existed for other keys (like admin_password)
+        await getSupabase().from('site_settings').delete().eq('key', key);
+      }
+
       const { error } = await getSupabase()
         .from('secure_passwords')
         .upsert({
@@ -793,21 +853,6 @@ async function startServer() {
         }, { onConflict: 'key' });
 
       if (error) throw error;
-
-      // For CV and Notepad passwords, also store in site_settings for admin visibility
-      if (key === 'cv_password' || key === 'notepad_password') {
-        await getSupabase()
-          .from('site_settings')
-          .upsert({ 
-            key, 
-            value: password,
-            updated_at: new Date().toISOString(),
-            updated_by: (req as any).user.id 
-          }, { onConflict: 'key' });
-      } else {
-        // Ensure legacy plain text is removed if it existed for other keys (like admin_password)
-        await getSupabase().from('site_settings').delete().eq('key', key);
-      }
 
       res.json({ success: true, message: 'Password updated and secured' });
     } catch (err: any) {
@@ -828,6 +873,17 @@ async function startServer() {
     const { password } = schemas.passwordVerify.parse(req.body);
     const key = 'cv_password';
     
+    // Check site_settings first for plain-text comparison (admin visibility preference)
+    const { data: settingsData } = await getSupabase()
+      .from('site_settings')
+      .select('value')
+      .eq('key', 'cv_password')
+      .single();
+    
+    if (settingsData?.value && password === settingsData.value) {
+      return res.json({ valid: true, success: true });
+    }
+
     const { data: passwordData, error } = await getSupabase()
       .from('secure_passwords')
       .select('hashed_value, locked_until')
@@ -1278,12 +1334,18 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  return app;
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+// For local development and non-Vercel environments
+if (!process.env.VERCEL) {
+  initApp().then(app => {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }).catch((err) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}

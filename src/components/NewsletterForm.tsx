@@ -19,8 +19,14 @@ export const NewsletterForm = () => {
         body: JSON.stringify({ email }),
       });
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to subscribe');
+      let data;
+      try {
+        data = await response.json();
+      } catch (e) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      if (!response.ok) throw new Error(data.error || `Error ${response.status}: ${data.message || 'Failed to subscribe'}`);
 
       setStatus('success');
       setMessage(data.message || 'Check your inbox for confirmation!');
