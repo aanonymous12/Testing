@@ -25,11 +25,15 @@ const __dirname = path.dirname(__filename);
 // ============================================
 const getEnv = (key: string, fallback?: string): string => {
   const value = process.env[key] || fallback;
-  if (!value && !fallback && key !== 'SENTRY_DSN') {
+  if (!value && !fallback && !['SENTRY_DSN', 'GMAIL_APP_PASSWORD', 'UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'SMTP_HOST'].includes(key)) {
     console.warn(`Warning: Environment variable ${key} is missing.`);
   }
-  return value || '';
+  return (value || '').trim().replace(/^["']|["']$/g, '');
 };
+
+const smtpHost = getEnv('SMTP_HOST');
+const gmailPass = getEnv('GMAIL_APP_PASSWORD');
+const adminEmail = getEnv('ADMIN_EMAIL');
 
 const config = {
   url: getEnv('VITE_APP_URL', 'https://janakpanthi.com'),
@@ -38,20 +42,20 @@ const config = {
     serviceKey: getEnv('SUPABASE_SERVICE_ROLE_KEY'),
   },
   smtp: {
-    host: getEnv('SMTP_HOST'),
-    port: parseInt(getEnv('SMTP_PORT', '587')),
-    secure: getEnv('SMTP_SECURE') === 'true',
+    host: smtpHost || (gmailPass ? 'smtp.gmail.com' : ''),
+    port: parseInt(getEnv('SMTP_PORT', smtpHost ? '587' : '465')),
+    secure: getEnv('SMTP_SECURE') === 'true' || (gmailPass && !smtpHost ? true : false),
     auth: {
-      user: getEnv('SMTP_USER'),
-      pass: getEnv('SMTP_PASS'),
+      user: getEnv('SMTP_USER', adminEmail),
+      pass: getEnv('SMTP_PASS', gmailPass),
     },
     from: {
       name: getEnv('SMTP_FROM_NAME', 'Janak Panthi'),
-      email: getEnv('SMTP_FROM_EMAIL'),
+      email: getEnv('SMTP_FROM_EMAIL', adminEmail),
     },
   },
   admin: {
-    email: getEnv('ADMIN_EMAIL'),
+    email: adminEmail,
   },
   google: {
     serviceAccountEmail: getEnv('GOOGLE_SERVICE_ACCOUNT_EMAIL'),
@@ -972,36 +976,63 @@ export async function initApp() {
     }
   });
 
+  // ============================================
+  // HEALTH CHECK
+  // ============================================
+  app.get('/api/v1/health', async (req, res) => {
+    const status: any = {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      env: process.env.NODE_ENV,
+      database: 'checking...',
+      googleSearchConsole: !!config.google.privateKey && !!config.google.serviceAccountEmail,
+      email: !!config.smtp.auth.pass,
+    };
+
+    try {
+      const { error } = await getSupabase().from('site_settings').select('key').limit(1);
+      status.database = error ? `Error: ${error.message}` : 'connected';
+    } catch (e: any) {
+      status.database = `Failed: ${e.message}`;
+    }
+
+    res.json(status);
+  });
+
   app.post('/api/v1/newsletter/subscribe', newsletterRateLimit, async (req, res) => {
     try {
       const { email } = schemas.newsletterSubscribe.parse(req.body);
       
+      const supabase = getSupabase();
+      
       // Clean previous attempts or duplicates if they were unsubscribed
-      await getSupabase().from('newsletter_subscribers').delete().eq('email', email).eq('status', 'unsubscribed');
+      await supabase.from('newsletter_subscribers').delete().eq('email', email).eq('status', 'unsubscribed');
 
-      const { data: existing } = await getSupabase()
+      const { data: existing, error: fetchError } = await supabase
         .from('newsletter_subscribers')
         .select('id, status')
         .eq('email', email)
-        .single();
+        .maybeSingle();
+
+      if (fetchError) throw new Error(`Database fetch error: ${fetchError.message}`);
 
       if (existing && existing.status === 'active') {
         return res.json({ success: true, message: 'Already subscribed' });
       }
 
       const token = crypto.randomUUID();
-      const { error } = await getSupabase()
+      const { error: insertError } = await supabase
         .from('newsletter_subscribers')
-        .insert([{ email, token, status: 'active' }]);
+        .upsert([{ email, token, status: 'active' }], { onConflict: 'email' });
 
-      if (error) throw error;
+      if (insertError) throw new Error(`Database insert error: ${insertError.message}`);
 
       // Send welcome email
-      const { data: templateData } = await getSupabase()
+      const { data: templateData } = await supabase
         .from('site_settings')
         .select('value')
         .eq('key', 'email_template_newsletter_welcome')
-        .single();
+        .maybeSingle();
 
       if (templateData?.value) {
         try {
@@ -1011,7 +1042,7 @@ export async function initApp() {
             subject: 'Welcome to Janak Panthi Newsletter!',
             html: templateData.value,
           });
-        } catch (mailErr) {
+        } catch (mailErr: any) {
           console.error('Welcome mail failed:', mailErr);
         }
       }
@@ -1019,7 +1050,11 @@ export async function initApp() {
       res.json({ success: true, message: 'Subscribed successfully' });
     } catch (err: any) {
       console.error('Newsletter error:', err);
-      res.status(500).json({ error: err.message || 'Failed to subscribe' });
+      res.status(500).json({ 
+        error: 'Subscription failed', 
+        details: err.message,
+        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined 
+      });
     }
   });
 
@@ -1276,6 +1311,10 @@ export async function initApp() {
     try {
       const { startDate, endDate, dimension } = schemas.analyticsQuery.parse(req.query);
       
+      if (!config.google.serviceAccountEmail || !config.google.privateKey) {
+        throw new Error('Google Service Account credentials missing');
+      }
+
       const auth = new google.auth.JWT({
         email: config.google.serviceAccountEmail,
         key: config.google.privateKey,
@@ -1283,19 +1322,43 @@ export async function initApp() {
       });
       
       const sc = google.searchconsole({ version: 'v1', auth });
-      const response = await sc.searchanalytics.query({
-        siteUrl: config.google.siteUrl,
+      
+      let siteUrl = config.google.siteUrl;
+      // Auto-prefix with sc-domain: if it looks like a domain and lacks protocol
+      if (siteUrl && !siteUrl.startsWith('http') && !siteUrl.startsWith('sc-domain:')) {
+        siteUrl = `sc-domain:${siteUrl}`;
+      }
+
+      const queryParams = {
+        siteUrl: siteUrl,
         requestBody: {
           startDate: (startDate as string) || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
           endDate: (endDate as string) || new Date().toISOString().split('T')[0],
           dimensions: dimension ? [dimension as string] : ['date'],
           rowLimit: 1000,
         },
-      });
-      res.json(response.data);
-    } catch (err) {
+      };
+
+      try {
+        const response = await sc.searchanalytics.query(queryParams);
+        res.json(response.data);
+      } catch (innerErr: any) {
+        // Try without sc-domain: if it failed and we added it
+        if (siteUrl.startsWith('sc-domain:') && innerErr.message?.includes('not found')) {
+          const fallbackUrl = siteUrl.replace('sc-domain:', 'https://') + '/';
+          queryParams.siteUrl = fallbackUrl;
+          const retryResponse = await sc.searchanalytics.query(queryParams);
+          return res.json(retryResponse.data);
+        }
+        throw innerErr;
+      }
+    } catch (err: any) {
       console.error('GSC Analytics error:', err);
-      res.status(500).json({ error: 'Analytics failed', details: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ 
+        error: 'Analytics failed', 
+        details: err.message,
+        hint: 'Ensure Service Account Email has Permission for this site in GSC'
+      });
     }
   });
 
