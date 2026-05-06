@@ -61,36 +61,47 @@ const Statistics = () => {
     try {
       // Fetch multiple dimensions in parallel
       const dimensions = ['date', 'query', 'page', 'country', 'device', 'searchAppearance'];
-      const results = await Promise.all(
+      const results = await Promise.allSettled(
         dimensions.map(dim => 
           fetch(`/api/v1/gsc/stats?startDate=${startDate}&endDate=${endDate}&dimension=${dim}`)
-            .then(res => {
-              if (!res.ok) throw new Error(`Failed to fetch ${dim} stats`);
+            .then(async res => {
+              if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(errorData.details || errorData.error || `Failed to fetch ${dim} stats`);
+              }
               return res.json();
             })
         )
       );
 
-      const [dateData, queryData, pageData, countryData, deviceData, appearanceData] = results;
+      // Handle results specifically
+      const [dateRes, queryRes, pageRes, countryRes, deviceRes, appearanceRes] = results;
 
-      setGscStats(processGscData(dateData.rows || []));
-      setGscQueries(queryData.rows || []);
-      setGscPages(pageData.rows || []);
+      if (dateRes.status === 'fulfilled') {
+        setGscStats(processGscData(dateRes.value.rows || []));
+      } else {
+        throw new Error(dateRes.reason.message); // Date is critical for the main chart
+      }
+
+      setGscQueries(queryRes.status === 'fulfilled' ? queryRes.value.rows || [] : []);
+      setGscPages(pageRes.status === 'fulfilled' ? pageRes.value.rows || [] : []);
       
       const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
-      setGscCountries((countryData.rows || []).map((row: any) => ({
-        ...row,
-        fullName: (() => {
-          try {
-            return regionNames.of(row.keys[0].toUpperCase()) || row.keys[0];
-          } catch (e) {
-            return row.keys[0];
-          }
-        })()
-      })));
+      if (countryRes.status === 'fulfilled') {
+        setGscCountries((countryRes.value.rows || []).map((row: any) => ({
+          ...row,
+          fullName: (() => {
+            try {
+              return regionNames.of(row.keys[0].toUpperCase()) || row.keys[0];
+            } catch (e) {
+              return row.keys[0];
+            }
+          })()
+        })));
+      }
       
-      setGscDevices(deviceData.rows || []);
-      setGscAppearance(appearanceData.rows || []);
+      setGscDevices(deviceRes.status === 'fulfilled' ? deviceRes.value.rows || [] : []);
+      setGscAppearance(appearanceRes.status === 'fulfilled' ? appearanceRes.value.rows || [] : []);
       setGscError(null);
     } catch (err: any) {
       console.error('Error fetching GSC stats:', err);

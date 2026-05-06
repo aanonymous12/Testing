@@ -24,11 +24,22 @@ const __dirname = path.dirname(__filename);
 // ENVIRONMENT CONFIGURATION
 // ============================================
 const getEnv = (key: string, fallback?: string): string => {
-  const value = process.env[key] || fallback;
+  let value = process.env[key] || fallback;
   if (!value && !fallback && !['SENTRY_DSN', 'GMAIL_APP_PASSWORD', 'UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'SMTP_HOST'].includes(key)) {
     console.warn(`Warning: Environment variable ${key} is missing.`);
   }
-  return (value || '').trim().replace(/^["']|["']$/g, '');
+  
+  if (!value) return fallback || '';
+
+  // Handle common formatting issues
+  value = value.trim().replace(/^["']|["']$/g, '');
+  
+  // Specifically fix Google Private Keys with \n literals
+  if (key === 'GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY' && value.includes('\\n')) {
+    return value.replace(/\\n/g, '\n');
+  }
+  
+  return value;
 };
 
 const smtpHost = getEnv('SMTP_HOST');
@@ -987,11 +998,17 @@ export async function initApp() {
       database: 'checking...',
       googleSearchConsole: !!config.google.privateKey && !!config.google.serviceAccountEmail,
       email: !!config.smtp.auth.pass,
+      supabaseConfigured: !!config.supabase.url && config.supabase.url !== 'https://placeholder.supabase.co',
     };
 
     try {
-      const { error } = await getSupabase().from('site_settings').select('key').limit(1);
-      status.database = error ? `Error: ${error.message}` : 'connected';
+      const { data, error } = await getSupabase().from('site_settings').select('key').limit(1);
+      if (error) {
+         status.database = `Error: ${error.message}`;
+         status.dbDetails = error;
+      } else {
+         status.database = 'connected';
+      }
     } catch (e: any) {
       status.database = `Failed: ${e.message}`;
     }
@@ -1049,11 +1066,13 @@ export async function initApp() {
 
       res.json({ success: true, message: 'Subscribed successfully' });
     } catch (err: any) {
-      console.error('Newsletter error:', err);
+      console.error('[NEWSLETTER SUBSCRIBE ERROR]:', err);
+      // Detailed error for client to help debugging Vercel issues
       res.status(500).json({ 
         error: 'Subscription failed', 
-        details: err.message,
-        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined 
+        details: err.message || 'Unknown database or server error',
+        code: err.code,
+        hint: 'Check if newsletter_subscribers table exists and service role key is correct'
       });
     }
   });
@@ -1343,13 +1362,28 @@ export async function initApp() {
         const response = await sc.searchanalytics.query(queryParams);
         res.json(response.data);
       } catch (innerErr: any) {
+        const message = innerErr.message?.toLowerCase() || '';
+        
         // Try without sc-domain: if it failed and we added it
-        if (siteUrl.startsWith('sc-domain:') && innerErr.message?.includes('not found')) {
+        if (siteUrl.startsWith('sc-domain:') && message.includes('not found')) {
           const fallbackUrl = siteUrl.replace('sc-domain:', 'https://') + '/';
           queryParams.siteUrl = fallbackUrl;
-          const retryResponse = await sc.searchanalytics.query(queryParams);
-          return res.json(retryResponse.data);
+          try {
+            const retryResponse = await sc.searchanalytics.query(queryParams);
+            return res.json(retryResponse.data);
+          } catch (retryErr) {
+             throw retryErr;
+          }
         }
+
+        if (message.includes('permission') || message.includes('forbidden')) {
+          throw new Error(`Permission Denied: Ensure ${config.google.serviceAccountEmail} is added as a user for ${siteUrl} in Search Console.`);
+        }
+        
+        if (message.includes('not found')) {
+          throw new Error(`Site Not Found: The URL "${siteUrl}" (or variant) is not in your Search Console account.`);
+        }
+
         throw innerErr;
       }
     } catch (err: any) {
@@ -1403,7 +1437,7 @@ export async function initApp() {
 // For local development and non-Vercel environments
 if (!process.env.VERCEL) {
   initApp().then(app => {
-    const PORT = process.env.PORT || 3000;
+    const PORT = Number(process.env.PORT) || 3000;
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server running on http://localhost:${PORT}`);
     });
