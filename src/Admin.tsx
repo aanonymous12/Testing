@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './lib/supabase';
 import { NotepadAdminManager } from './components/NotepadAdminManager';
 import { motion, AnimatePresence } from 'motion/react';
-import { LogIn, Save, Plus, Trash2, LogOut, Settings, Briefcase, Award, Users, Image as ImageIcon, FileText, CheckCircle, Upload, Loader2, MessageSquare, User as UserIcon, Menu, X, Share2, Palette, Database, Globe, Box, UserPlus, Link as LinkIcon, Activity, Send, Mail, Eye, EyeOff, Code, ListTodo, Calendar, Clock, Wrench, Search, Home, RefreshCw, Sun, Moon, Bell, Shield, Zap, Lock, Cpu, Check, RotateCcw, User, StickyNote, Phone, AlertTriangle } from 'lucide-react';
+import { LogIn, Save, Plus, Trash2, LogOut, Settings, Briefcase, Award, Users, Image as ImageIcon, FileText, CheckCircle, Upload, Loader2, MessageSquare, User as UserIcon, Menu, X, Share2, Palette, Database, Globe, Box, UserPlus, Link as LinkIcon, Activity, Send, Mail, Eye, EyeOff, Code, ListTodo, Calendar, Clock, Wrench, Search, Home, RefreshCw, Sun, Moon, Bell, Shield, Zap, Lock, Cpu, Check, RotateCcw, User, StickyNote, Phone, AlertTriangle, Info } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import Statistics from './components/Statistics';
 import { useContent, useSettings, useSocialLinks, useDevLogs } from './hooks/useContent';
@@ -341,6 +341,7 @@ const Admin = () => {
             <TabButton active={activeTab === 'gallery'} onClick={() => { setActiveTab('gallery'); setIsSidebarOpen(false); }} icon={<ImageIcon size={18} />} label="Gallery" />
             <TabButton active={activeTab === 'hero_about'} onClick={() => { setActiveTab('hero_about'); setIsSidebarOpen(false); }} icon={<User size={18} />} label="Hero & About" />
             <TabButton active={activeTab === 'devlogs'} onClick={() => { setActiveTab('devlogs'); setIsSidebarOpen(false); }} icon={<FileText size={18} />} label="Dev Logs" />
+            <TabButton active={activeTab === 'newsletter'} onClick={() => { setActiveTab('newsletter'); setIsSidebarOpen(false); }} icon={<Bell size={18} />} label="Subscribers" />
             <TabButton 
               active={activeTab === 'cv'} 
               onClick={() => { setActiveTab('cv'); setIsSidebarOpen(false); }} 
@@ -479,6 +480,7 @@ const Admin = () => {
                    <DevLogManager showNotification={showNotification} />
                  </div>
               )}
+              {activeTab === 'newsletter' && <NewsletterManager showNotification={showNotification} />}
               {activeTab === 'cv' && <CVManager onRefresh={fetchUnreadCounts} showNotification={showNotification} />}
               {activeTab === 'social' && <SocialLinksEditor showNotification={showNotification} />}
               {activeTab === 'connect' && <ConnectWithMeEditor onRefresh={fetchUnreadCounts} showNotification={showNotification} />}
@@ -2399,10 +2401,21 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
     try {
       const { data: sData } = await supabase.from('site_settings').select('*').in('key', ['cv_url', 'cv_password']);
       const { data: rData } = await supabase.from('cv_requests').select('*').order('created_at', { ascending: false });
-      if (sData) {
-        setSettings(sData);
-        setOriginalSettings(JSON.parse(JSON.stringify(sData)));
+      
+      let finalSettings = sData || [];
+      // Ensure cv_password is always present in the UI even if it's not in site_settings (it's in secure_passwords now)
+      if (!finalSettings.some(s => s.key === 'cv_password')) {
+        finalSettings.push({ 
+          id: 'cv_pwd_id', 
+          key: 'cv_password', 
+          value: '',
+          isVirtual: true 
+        });
       }
+
+      setSettings(finalSettings);
+      setOriginalSettings(JSON.parse(JSON.stringify(finalSettings)));
+      
       if (rData) setRequests(rData);
       if (onRefresh) onRefresh();
     } catch (err: any) {
@@ -2420,8 +2433,12 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
       const cvPasswordSetting = settings.find(s => s.key === 'cv_password');
       const originalPasswordSetting = originalSettings.find(os => os.key === 'cv_password');
       
-      // If password changed, update it via secure API
-      if (cvPasswordSetting && cvPasswordSetting.value !== originalPasswordSetting?.value) {
+      // If password changed (and not empty), update it via secure API
+      if (cvPasswordSetting && cvPasswordSetting.value && cvPasswordSetting.value !== originalPasswordSetting?.value) {
+        if (cvPasswordSetting.value.length < 4) {
+          throw new Error('Password must be at least 4 characters long');
+        }
+        
         const response = await fetch('/api/v1/admin/auth/update-password', {
           method: 'POST',
           headers: { 
@@ -2448,11 +2465,12 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
       });
 
       for (const s of toUpdate) {
-        await supabase.from('site_settings').update({ value: s.value }).eq('id', s.id);
+        const { error } = await supabase.from('site_settings').update({ value: s.value }).eq('id', s.id);
+        if (error) throw error;
       }
 
       await fetchData();
-      showNotification('CV settings updated successfully and secured!');
+      showNotification('CV settings updated successfully!');
     } catch (err: any) {
       console.error(err);
       showNotification(err.message || 'Failed to save changes.', 'error');
@@ -2470,7 +2488,11 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
     const cvPassword = cvPasswordSetting?.value;
     
     if (!cvPassword) {
-      showNotification('Please set a CV password first', 'error');
+      showNotification('Please enter the current or a new CV password in the settings above first. This password will be sent to the user.', 'error');
+      try {
+        const input = document.querySelector('input[placeholder*="UPDATE"]');
+        if (input) input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (e) {}
       return;
     }
     
@@ -2569,7 +2591,7 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
                         value={s.value || ''}
                         onChange={(e) => handleValueChange(s.id, e.target.value)}
                         className="w-full bg-page border border-muted rounded-xl px-4 py-3 outline-none focus:border-primary transition-colors pr-12"
-                        placeholder="Set CV Access Password"
+                        placeholder={s.isVirtual ? "Enter password to UPDATE (Required for approvals)" : "Set CV Access Password"}
                       />
                       <button
                         type="button"
@@ -2579,6 +2601,13 @@ const CVManager = ({ onRefresh, showNotification }: { onRefresh: () => void, sho
                         {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                       </button>
                     </div>
+                    <p className="text-[10px] text-secondary/50 flex items-center gap-1">
+                      <Info size={10} />
+                      {s.isVirtual 
+                        ? "Password is now secured. Enter a value here to change it. Note: You MUST enter it here if you want to include it in the approval email."
+                        : "This password controls access to your private CV."
+                      }
+                    </p>
                   </div>
                 )}
               </div>
@@ -2678,7 +2707,7 @@ const ProfileEditor = ({ showNotification }: any) => {
 
   const calculateStrength = (pwd: string) => {
     let s = 0;
-    if (pwd.length >= 8) s++;
+    if (pwd.length >= 4) s++;
     if (/[A-Z]/.test(pwd)) s++;
     if (/[0-9]/.test(pwd)) s++;
     if (/[^A-Za-z0-9]/.test(pwd)) s++;
@@ -2786,7 +2815,7 @@ const ProfileEditor = ({ showNotification }: any) => {
             <h4 className="text-[11px] font-black uppercase tracking-[0.2em] text-secondary mb-4">Security Requirements</h4>
             <ul className="space-y-3">
               {[
-                { label: 'Minimum 8 characters', met: newPassword.length >= 8 },
+                { label: 'Minimum 4 characters', met: newPassword.length >= 4 },
                 { label: 'Include uppercase letters', met: /[A-Z]/.test(newPassword) },
                 { label: 'Include numbers', met: /[0-9]/.test(newPassword) },
                 { label: 'Include special symbols', met: /[^A-Za-z0-9]/.test(newPassword) },
@@ -3149,6 +3178,72 @@ const EmailTemplatesEditor = ({ showNotification }: any) => {
 </body>
 </html>`
     },
+    {
+      key: 'email_template_newsletter_welcome',
+      label: 'Newsletter Welcome',
+      description: 'Sent to users when they subscribe to the newsletter.',
+      default: `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { background-color: #242424; font-family: 'Georgia', serif; padding: 40px 16px; margin: 0; }
+    .wrapper { max-width: 580px; margin: 0 auto; background-color: #1a1a18; border: 1px solid rgba(242, 240, 228, 0.08); border-radius: 2px; overflow: hidden; }
+    .header { background-color: #2e2d2a; padding: 28px 36px; border-bottom: 3px solid #da755b; }
+    .body { padding: 40px 36px; color: #f2f0e4; }
+    .footer { padding: 20px 36px; background: #1a1a18; border-top: 1px solid rgba(242, 240, 228, 0.08); color: #7a7570; font-size: 12px; }
+    h2 { margin: 0; font-size: 24px; color: #f2f0e4; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header"><h2>Welcome!</h2></div>
+    <div class="body">
+      <p>Hello,</p>
+      <p>Thank you for subscribing to my newsletter. You'll receive updates about new dev logs, technical deep-dives, and project releases.</p>
+    </div>
+    <div class="footer">You're receiving this because you signed up at janakpanthi.com</div>
+  </div>
+</body>
+</html>`
+    },
+    {
+      key: 'email_template_newsletter_broadcast',
+      label: 'Newsletter Broadcast (Dev Log)',
+      description: 'Used for sending new dev log notifications to all subscribers.',
+      default: `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { background-color: #242424; font-family: 'Georgia', serif; padding: 40px 16px; margin: 0; }
+    .wrapper { max-width: 580px; margin: 0 auto; background-color: #1a1a18; border: 1px solid rgba(242, 240, 228, 0.08); border-radius: 2px; overflow: hidden; }
+    .header { background-color: #2e2d2a; padding: 28px 36px; border-bottom: 3px solid #da755b; }
+    .body { padding: 40px 36px; color: #f2f0e4; line-height: 1.6; }
+    .footer { padding: 20px 36px; background: #1a1a18; border-top: 1px solid rgba(242, 240, 228, 0.08); color: #7a7570; font-size: 11px; text-align: center; }
+    .cta { display: inline-block; background: #da755b; color: #1a1a18; padding: 12px 24px; text-decoration: none; border-radius: 2px; font-family: monospace; font-weight: bold; text-transform: uppercase; margin-top: 20px; }
+    h2 { margin: 0; font-size: 26px; }
+    .summary { color: #7a7570; margin: 15px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header"><h2>\${data.title}</h2></div>
+    <div class="body">
+      <div class="summary">\${data.summary}</div>
+      <p>I just posted a new dev log. Click below to read the full story.</p>
+      <a href="\${data.link}" class="cta">Read Full Article</a>
+    </div>
+    <div class="footer">
+      Sent by Janak Panthi. <br/>
+      <a href="\${data.unsubscribe_link}" style="color: #da755b">Unsubscribe from this list</a>
+    </div>
+  </div>
+</body>
+</html>`
+    }
   ];
 
   useEffect(() => {
@@ -3980,9 +4075,211 @@ const DevLogManager = ({ showNotification }: any) => {
                 />
                 <label htmlFor={`featured-${item.id}`} className="text-sm font-medium cursor-pointer">Show on Main Site (Featured)</label>
               </div>
+
+              {!String(item.id).startsWith('temp-') && (
+                <div className="pt-6 border-t border-muted flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-secondary/60">
+                    <Mail size={16} />
+                    <span className="text-xs font-mono uppercase tracking-wider">Newsletter</span>
+                  </div>
+                  <button
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (!confirm('Broadcast this post to all newsletter subscribers?')) return;
+                      try {
+                        const { data: { session } } = await supabase.auth.getSession();
+                        if (!item.slug) {
+                          showNotification('Post must have a slug before broadcasting.', 'error');
+                          return;
+                        }
+                        const response = await fetch('/api/v1/admin/newsletter/broadcast', {
+                          method: 'POST',
+                          headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${session?.access_token}`
+                          },
+                          body: JSON.stringify({
+                            title: item.title || 'Untitled Post',
+                            summary: item.excerpt || 'New blog post published.',
+                            slug: item.slug
+                          })
+                        });
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.error || 'Broadcast failed');
+                        showNotification(`Broadcast results: ${data.sent} sent, ${data.failed} failed.`);
+                      } catch (err: any) {
+                        showNotification(err.message, 'error');
+                      }
+                    }}
+                    className="flex items-center gap-2 bg-primary/10 text-primary px-4 py-2 rounded-xl text-xs font-bold hover:bg-primary hover:text-white transition-all shadow-lg shadow-primary/5 group"
+                  >
+                    <Bell size={14} className="group-hover:animate-ring" />
+                    Broadcast Now
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+};
+
+const NewsletterManager = ({ showNotification }: any) => {
+  const [subscribers, setSubscribers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchSubscribers();
+  }, []);
+
+  const fetchSubscribers = async () => {
+    setLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch('/api/v1/admin/newsletter/subscribers', {
+        headers: { 'Authorization': `Bearer ${session?.access_token}` }
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.error || `Server returned ${response.status}: ${response.statusText}`;
+        throw new Error(errorMessage);
+      }
+      const data = await response.json();
+      setSubscribers(data);
+    } catch (err: any) {
+      console.error(err);
+      showNotification(err.message || 'Error fetching subscribers', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleStatus = async (id: string, email: string, currentStatus: string) => {
+    const newStatus = currentStatus === 'active' ? 'unsubscribed' : 'active';
+    if (!confirm(`Are you sure you want to ${newStatus === 'active' ? 'resubscribe' : 'unsubscribe'} ${email}?`)) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch(`/api/v1/admin/newsletter/subscribers/${id}/toggle`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({ status: newStatus })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to update status (${response.status})`);
+      }
+      showNotification(`User ${newStatus === 'active' ? 'resubscribed' : 'unsubscribed'}`);
+      fetchSubscribers();
+    } catch (err: any) {
+      showNotification(err.message || 'Failed to update status', 'error');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Permanently delete this subscriber?')) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch(`/api/v1/admin/newsletter/subscribers/${id}`, {
+        method: 'DELETE',
+        headers: { 
+          'Authorization': `Bearer ${session?.access_token}`
+        }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to delete subscriber (${response.status})`);
+      }
+      showNotification('Subscriber deleted');
+      fetchSubscribers();
+    } catch (err: any) {
+      showNotification(err.message || 'Deletion failed', 'error');
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-bold">Newsletter Subscribers</h2>
+          <p className="text-secondary/60">Manage your audience and see who's joined.</p>
+        </div>
+        <button 
+          onClick={fetchSubscribers}
+          className="p-3 bg-alt border border-muted rounded-xl hover:bg-page transition-all"
+        >
+          <RefreshCw size={20} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+
+      <div className="bg-alt border border-muted rounded-2xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-muted bg-page/50">
+                <th className="px-6 py-4 text-xs font-mono uppercase tracking-wider">Email</th>
+                <th className="px-6 py-4 text-xs font-mono uppercase tracking-wider">Status</th>
+                <th className="px-6 py-4 text-xs font-mono uppercase tracking-wider">Joined</th>
+                <th className="px-6 py-4 text-xs font-mono uppercase tracking-wider text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-muted">
+              {subscribers.map(sub => (
+                <tr key={sub.id} className="hover:bg-page/30 transition-colors">
+                  <td className="px-6 py-4 font-medium truncate max-w-[200px]">{sub.email}</td>
+                  <td className="px-6 py-4">
+                    <span className={cn(
+                      "px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider whitespace-nowrap",
+                      sub.status === 'active' ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500"
+                    )}>
+                      {sub.status}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-secondary/60 whitespace-nowrap">
+                    {new Date(sub.created_at).toLocaleDateString()}
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <button 
+                        onClick={() => handleToggleStatus(sub.id, sub.email, sub.status)}
+                        className={cn(
+                          "p-2 rounded-lg transition-all",
+                          sub.status === 'active' 
+                            ? "text-secondary/40 hover:text-orange-500 hover:bg-orange-500/10" 
+                            : "text-green-500/40 hover:text-green-500 hover:bg-green-500/10"
+                        )}
+                        title={sub.status === 'active' ? "Unsubscribe User" : "Re-subscribe User"}
+                      >
+                        <Bell size={16} className={sub.status === 'active' ? '' : 'opacity-30'} />
+                      </button>
+                      <button 
+                        onClick={() => handleDelete(sub.id)}
+                        className="p-2 text-secondary/40 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                        title="Delete Permanently"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {subscribers.length === 0 && !loading && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-secondary/50">
+                    No subscribers found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

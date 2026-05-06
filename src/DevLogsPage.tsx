@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { useDevLogs } from './hooks/useContent';
 import { tracking } from './lib/tracking';
 import SEO from './components/SEO';
+import { NewsletterForm } from './components/NewsletterForm';
 
 const DevLogsPage = () => {
   const { posts, loading } = useDevLogs();
@@ -133,6 +134,31 @@ const DevLogsPage = () => {
             <p className="text-secondary text-lg italic">No articles found matching your search.</p>
           </div>
         )}
+
+        {/* Newsletter Section */}
+        <motion.div 
+          initial={{ opacity: 0, y: 30 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          className="mt-32 p-12 bg-alt border border-muted rounded-[2.5rem] relative overflow-hidden group"
+        >
+          <div className="absolute top-0 right-0 -translate-y-1/2 translate-x-1/4 w-96 h-96 bg-accent/5 rounded-full blur-3xl pointer-events-none" />
+          
+          <div className="relative z-10 max-w-2xl mx-auto text-center space-y-8">
+            <div className="space-y-4">
+              <h2 className="text-4xl font-bold tracking-tight">Stay <span className="text-primary italic">notified</span>.</h2>
+              <p className="text-secondary text-lg">
+                Subscribe to get the latest dev logs, technical explorations, and project updates delivered directly to your inbox.
+              </p>
+            </div>
+
+            <NewsletterForm />
+
+            <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-secondary/40">
+              No spam. Unsubscribe any time with one click.
+            </p>
+          </div>
+        </motion.div>
       </div>
     </div>
   );

@@ -34,6 +34,7 @@
     "express-rate-limit": "^8.3.2",
     "googleapis": "^171.4.0",
     "helmet": "^8.1.0",
+    "hpp": "^0.2.3",
     "isomorphic-dompurify": "^3.11.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",

@@ -70,14 +70,25 @@ export const NotepadAdminManager = ({ showNotification }: any) => {
   };
 
   const handleSetPassword = async (id: string, password: string) => {
+    if (password && password.length < 4) {
+      showNotification('Note password must be at least 4 characters long', 'error');
+      return;
+    }
     setSavingId(id);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch(`/api/v1/admin/notes/${id}/password`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`
+        },
         body: JSON.stringify({ password })
       });
-      if (!response.ok) throw new Error('Failed to update password');
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || errData.details || 'Failed to update password');
+      }
       
       setNotes(notes.map(n => n.id === id ? { ...n, is_locked: !!password } : n));
       showNotification(password ? 'Password set and note locked!' : 'Password cleared and note unlocked!');

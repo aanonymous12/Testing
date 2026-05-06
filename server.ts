@@ -10,6 +10,7 @@ import { Redis } from '@upstash/redis';
 import { google } from 'googleapis';
 import cors from 'cors';
 import helmet from 'helmet';
+import hpp from 'hpp';
 import * as Sentry from '@sentry/node';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
@@ -31,6 +32,7 @@ const getEnv = (key: string, fallback?: string): string => {
 };
 
 const config = {
+  url: getEnv('VITE_APP_URL', 'https://janakpanthi.com'),
   supabase: {
     url: getEnv('VITE_SUPABASE_URL'),
     serviceKey: getEnv('SUPABASE_SERVICE_ROLE_KEY'),
@@ -229,10 +231,12 @@ async function startServer() {
   app.use(helmet({
     contentSecurityPolicy: cspConfig,
     crossOriginEmbedderPolicy: false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
   }));
+  app.use(hpp()); // Prevent HTTP Parameter Pollution
   app.use(cors({ origin: true, credentials: true }));
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  app.use(express.json({ limit: '1mb' })); // Restricted size for security
+  app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
   // SECURITY: Global Input Sanitization Middleware
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -302,6 +306,8 @@ async function startServer() {
         type: z.literal('todo_notification'),
         data: z.object({
           task: z.string().min(1).max(500),
+          priority: z.string().optional(),
+          due_date: z.string().optional(),
         }),
       }),
       z.object({
@@ -311,6 +317,41 @@ async function startServer() {
           phone: z.string().max(20),
           email: z.string().email().optional(),
           note: z.string().max(500).optional(),
+        }),
+      }),
+      z.object({
+        type: z.literal('broadcast_blog'),
+        data: z.object({
+          title: z.string().min(1).max(200),
+          summary: z.string().min(1).max(1000),
+          slug: z.string().min(1).max(200),
+        }),
+      }),
+      z.object({
+        type: z.literal('cv_approval'),
+        data: z.object({
+          name: z.string().min(1).max(100),
+          email: z.string().email(),
+          password: z.string().min(1),
+          downloadUrl: z.string().min(1), // Relaxed from .url() to handle potential protocol issues
+        }),
+      }),
+      z.object({
+        type: z.literal('admin_reply'),
+        data: z.object({
+          name: z.string().min(1).max(100),
+          email: z.string().email(),
+          subject: z.string().min(1).max(200),
+          message: z.string().min(1).max(5000),
+        }),
+      }),
+      z.object({
+        type: z.literal('send_vcf'),
+        data: z.object({
+          userName: z.string().min(1).max(100),
+          userEmail: z.string().email(),
+          adminPhone: z.string().min(1).max(20),
+          adminEmail: z.string().email(),
         }),
       })
     ]),
@@ -328,7 +369,7 @@ async function startServer() {
 
     adminPasswordUpdate: z.object({
       key: z.enum(['cv_password', 'notepad_password', 'admin_password']),
-      password: z.string().min(8).max(100),
+      password: z.string().min(4).max(100),
     }),
 
     notePasswordUpdate: z.object({
@@ -344,20 +385,45 @@ async function startServer() {
       gtmId: z.string().regex(/^GTM-[A-Z0-9]+$/, 'Invalid GTM ID format').or(z.literal('')),
       gaId: z.string().regex(/^G-[A-Z0-9]+$/, 'Invalid GA ID format').or(z.literal('')),
     }),
+
+    newsletterSubscribe: z.object({
+      email: z.string().email().max(255).trim().toLowerCase(),
+    }),
+
+    newsletterUnsubscribe: z.object({
+      email: z.string().email(),
+      token: z.string().uuid(),
+    }),
+
+    broadcast: z.object({
+      title: z.string().min(1).max(200),
+      summary: z.string().max(2000).optional(),
+      slug: z.string().min(1).max(200),
+    }),
   };
 
   // ============================================
-  // MIDDLEWARE
+  // MIDDLEWARE: RATE LIMITING
+  // ============================================
+  const newsletterRateLimit = createRateLimitMiddleware('contact');
+
+  // ============================================
+  // ADMIN AUTHENTICATION MIDDLEWARE
   // ============================================
   const verifyAdmin = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const authHeader = req.headers.authorization;
-      if (!authHeader) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authHeader) return res.status(401).json({ error: 'Unauthorized: No token provided' });
 
       const token = authHeader.split(' ')[1];
+      if (!token) return res.status(401).json({ error: 'Unauthorized: Invalid token format' });
+
       const { data: { user }, error } = await getSupabase().auth.getUser(token);
 
-      if (error || !user) return res.status(401).json({ error: 'Unauthorized' });
+      if (error || !user) return res.status(401).json({ error: 'Unauthorized: Invalid session' });
+      
+      // Critical security check: email must be verified
+      if (!user.email_confirmed_at) return res.status(403).json({ error: 'Forbidden: Email not verified' });
 
       const { data: adminCheck } = await getSupabase()
         .from('admin_users')
@@ -366,11 +432,15 @@ async function startServer() {
         .eq('is_active', true)
         .single();
 
-      if (!adminCheck) return res.status(403).json({ error: 'Forbidden' });
+      if (!adminCheck) {
+        console.warn(`[SECURITY] Unauthorized admin access attempt by ${user.email} from ${req.ip}`);
+        return res.status(403).json({ error: 'Forbidden: You do not have admin access' });
+      }
 
       (req as any).user = user;
       next();
     } catch (err) {
+      console.error('Auth check error:', err);
       res.status(500).json({ error: 'Internal Server Error' });
     }
   };
@@ -444,9 +514,58 @@ async function startServer() {
         .eq('key', templateKey)
         .single();
 
-      if (!template?.value) return;
+      let html = template?.value;
 
-      let html = template.value;
+      if (!html) {
+        // Fallback templates
+        if (templateKey === 'email_template_cv_approval') {
+          html = `
+            <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #eee; border-radius: 10px;">
+              <h2 style="color: #da755b;">CV Access Approved</h2>
+              <p>Hello \${data.name},</p>
+              <p>Your request to access Janak Panthi's CV has been approved.</p>
+              <div style="background: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <p style="margin-top: 0;"><strong>Access Details:</strong></p>
+                <p>Password: <code style="background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 1.1em; color: #da755b;">\${data.password}</code></p>
+                <p style="margin-bottom: 0;">Download URL: <a href="\${data.downloadUrl}" style="color: #da755b;">Click here to download</a></p>
+              </div>
+              <p>This password is for your use only. If you have any further questions, feel free to reply to this email.</p>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <p style="font-size: 12px; color: #999;">Best Regards,<br/>Janak Panthi</p>
+            </div>
+          `;
+        } else if (templateKey === 'email_template_admin_reply') {
+          html = `
+            <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #eee; border-radius: 10px;">
+              <h2 style="color: #da755b;">Reply to: \${data.subject}</h2>
+              <p>Hello \${data.name},</p>
+              <p>Thank you for reaching out. Here is the response to your message:</p>
+              <div style="background: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0; white-space: pre-wrap;">
+                \${data.message}
+              </div>
+              <p>Best Regards,<br/>Janak Panthi</p>
+            </div>
+          `;
+        } else if (templateKey === 'email_template_vcf') {
+          html = `
+            <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #eee; border-radius: 10px;">
+              <h2 style="color: #da755b;">Contact Information Shared</h2>
+              <p>Hello \${data.userName},</p>
+              <p>Janak Panthi has shared his digital business card (VCF) with you as requested.</p>
+              <div style="background: #f9f9f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <p><strong>Contact Details:</strong></p>
+                <p>Email: \${data.adminEmail}</p>
+                <p>Phone: \${data.adminPhone}</p>
+              </div>
+              <p>Please save this information to your contacts.</p>
+              <p>Best Regards,<br/>Janak Panthi</p>
+            </div>
+          `;
+        } else {
+          return; // Still return if it's completely missing and no fallback
+        }
+      }
+
       for (const [key, value] of Object.entries(templateData)) {
         const regex = new RegExp(`\\$\\{data\\.${key}\\}`, 'g');
         html = html.replace(regex, sanitizeHtml(String(value)));
@@ -491,7 +610,13 @@ async function startServer() {
 
       if (error) throw error;
       res.json({ success: true });
-    } catch (err) {
+    } catch (err: any) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ 
+          error: 'Validation failed', 
+          details: err.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ') 
+        });
+      }
       console.error('Note password update error:', err);
       res.status(500).json({ error: 'Failed to update note password' });
     }
@@ -669,11 +794,29 @@ async function startServer() {
 
       if (error) throw error;
 
-      // Ensure legacy plain text is removed if it existed
-      await getSupabase().from('site_settings').delete().eq('key', key);
+      // For CV and Notepad passwords, also store in site_settings for admin visibility
+      if (key === 'cv_password' || key === 'notepad_password') {
+        await getSupabase()
+          .from('site_settings')
+          .upsert({ 
+            key, 
+            value: password,
+            updated_at: new Date().toISOString(),
+            updated_by: (req as any).user.id 
+          }, { onConflict: 'key' });
+      } else {
+        // Ensure legacy plain text is removed if it existed for other keys (like admin_password)
+        await getSupabase().from('site_settings').delete().eq('key', key);
+      }
 
       res.json({ success: true, message: 'Password updated and secured' });
-    } catch (err) {
+    } catch (err: any) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ 
+          error: 'Validation failed', 
+          details: err.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ') 
+        });
+      }
       console.error('Password Update error:', err);
       res.status(500).json({ error: 'Failed to update password' });
     }
@@ -744,19 +887,246 @@ async function startServer() {
       } else if (type === 'cv_request') {
         subject = `CV Request from ${data.name} (${data.company})`;
         templateKey = 'email_template_cv_request';
+      } else if (type === 'cv_approval') {
+        subject = 'CV Access Approved - Janak Panthi';
+        templateKey = 'email_template_cv_approval';
       } else if (type === 'todo_notification') {
         subject = `Todo Reminder: ${data.task}`;
         templateKey = 'email_template_todo';
+      } else if (type === 'admin_reply') {
+        subject = `Re: ${data.subject}`;
+        templateKey = 'email_template_admin_reply';
+      } else if (type === 'send_vcf') {
+        subject = 'Digital Business Card - Janak Panthi';
+        templateKey = 'email_template_vcf';
       }
 
       const { data: settings } = await getSupabase().from('site_settings').select('value').eq('key', 'contact_email').single();
       const adminEmail = settings?.value || config.admin.email;
 
-      await sendEmailNotification(adminEmail, subject, templateKey, data);
+      // For approvals and replies, send to user, otherwise send to admin
+      const recipient = (type === 'cv_approval' || type === 'admin_reply') ? data.email : 
+                        (type === 'send_vcf') ? data.userEmail : adminEmail;
+
+      await sendEmailNotification(recipient, subject, templateKey, data);
       res.json({ success: true });
     } catch (err) {
       console.error('Notification error:', err);
       res.status(500).json({ error: 'Failed to send notification' });
+    }
+  });
+
+  app.post('/api/v1/newsletter/subscribe', newsletterRateLimit, async (req, res) => {
+    try {
+      const { email } = schemas.newsletterSubscribe.parse(req.body);
+      
+      // Clean previous attempts or duplicates if they were unsubscribed
+      await getSupabase().from('newsletter_subscribers').delete().eq('email', email).eq('status', 'unsubscribed');
+
+      const { data: existing } = await getSupabase()
+        .from('newsletter_subscribers')
+        .select('id, status')
+        .eq('email', email)
+        .single();
+
+      if (existing && existing.status === 'active') {
+        return res.json({ success: true, message: 'Already subscribed' });
+      }
+
+      const token = crypto.randomUUID();
+      const { error } = await getSupabase()
+        .from('newsletter_subscribers')
+        .insert([{ email, token, status: 'active' }]);
+
+      if (error) throw error;
+
+      // Send welcome email
+      const { data: templateData } = await getSupabase()
+        .from('site_settings')
+        .select('value')
+        .eq('key', 'email_template_newsletter_welcome')
+        .single();
+
+      if (templateData?.value) {
+        try {
+          await getTransporter().sendMail({
+            from: `"${config.smtp.from.name}" <${config.smtp.from.email}>`,
+            to: email,
+            subject: 'Welcome to Janak Panthi Newsletter!',
+            html: templateData.value,
+          });
+        } catch (mailErr) {
+          console.error('Welcome mail failed:', mailErr);
+        }
+      }
+
+      res.json({ success: true, message: 'Subscribed successfully' });
+    } catch (err: any) {
+      console.error('Newsletter error:', err);
+      res.status(500).json({ error: err.message || 'Failed to subscribe' });
+    }
+  });
+
+  app.get('/api/v1/newsletter/unsubscribe', async (req, res) => {
+    try {
+      const { email, token } = req.query;
+      if (!email || !token) return res.status(400).send('Invalid request');
+
+      const { error } = await getSupabase()
+        .from('newsletter_subscribers')
+        .update({ status: 'unsubscribed' })
+        .eq('email', email)
+        .eq('token', token);
+
+      if (error) throw error;
+
+      res.send('<h1>Unsubscribed</h1><p>You have been successfully removed from our list.</p>');
+    } catch (err) {
+      res.status(500).send('Error processing request');
+    }
+  });
+
+  app.get('/api/v1/admin/newsletter/subscribers', verifyAdmin, async (req, res) => {
+    try {
+      const { data, error } = await getSupabase()
+        .from('newsletter_subscribers')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('[DATABASE ERROR] Failed to fetch newsletter subscribers:', error);
+        throw error;
+      }
+      res.json(data);
+    } catch (err: any) {
+      console.error('[FETCH ERROR] newsletter subscribers:', err.message);
+      res.status(500).json({ error: 'Failed to fetch subscribers: ' + (err.message || 'Unknown error') });
+    }
+  });
+
+  app.post('/api/v1/admin/newsletter/subscribers/:id/toggle', verifyAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = z.object({ 
+        status: z.enum(['active', 'unsubscribed']) 
+      }).parse(req.body);
+      
+      console.log(`Toggling subscriber ${id} to ${status}`);
+      
+      const { error } = await getSupabase()
+        .from('newsletter_subscribers')
+        .update({ status })
+        .eq('id', id);
+
+      if (error) {
+        console.error('Database error during toggle:', error);
+        throw error;
+      }
+      
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Toggle error:', err.message);
+      res.status(500).json({ error: err.message || 'Failed to toggle status' });
+    }
+  });
+
+  app.delete('/api/v1/admin/newsletter/subscribers/:id', verifyAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      console.log(`Deleting subscriber ${id}`);
+      
+      const { error } = await getSupabase()
+        .from('newsletter_subscribers')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Database error during delete:', error);
+        throw error;
+      }
+      
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Delete error:', err.message);
+      res.status(500).json({ error: err.message || 'Failed to delete subscriber' });
+    }
+  });
+
+  app.post('/api/v1/admin/newsletter/broadcast', verifyAdmin, async (req, res) => {
+    try {
+      console.log('Starting Newsletter Broadcast:', { 
+        title: req.body.title, 
+        slug: req.body.slug,
+        admin: (req as any).user?.email 
+      });
+
+      const { title, summary, slug } = schemas.broadcast.parse(req.body);
+      
+      const { data: subscribers, error } = await getSupabase()
+        .from('newsletter_subscribers')
+        .select('email, token')
+        .eq('status', 'active');
+
+      if (error) throw error;
+      
+      if (!subscribers?.length) {
+        return res.json({ success: true, sent: 0, failed: 0 });
+      }
+
+      const { data: templateData } = await getSupabase()
+        .from('site_settings')
+        .select('value')
+        .eq('key', 'email_template_newsletter_broadcast')
+        .single();
+
+      const template = templateData?.value;
+      if (!template) {
+        return res.status(400).json({ error: 'Newsletter broadcast template not found. Please ensure it exists in Site Settings.' });
+      }
+
+      const baseUrl = config.url || 'https://janakpanthi.com';
+      const BATCH_SIZE = 25;
+      const results = { success: 0, failed: 0 };
+
+      // Process batches sequentially to avoid overwhelming SMTP
+      for (let i = 0; i < subscribers.length; i += BATCH_SIZE) {
+        const batch = subscribers.slice(i, i + BATCH_SIZE);
+        
+        await Promise.all(batch.map(async (sub) => {
+          try {
+            const unsubLink = `${baseUrl}/api/v1/newsletter/unsubscribe?email=${encodeURIComponent(sub.email)}&token=${sub.token}`;
+            
+            let html = template;
+            const placeholders = {
+              title,
+              summary: summary || 'A new dev log has been posted.',
+              link: `${baseUrl}/logs/${slug}`,
+              unsubscribe_link: unsubLink
+            };
+
+            for (const [key, value] of Object.entries(placeholders)) {
+              const regex = new RegExp(`\\$\\{data\\.${key}\\}`, 'g');
+              html = html.replace(regex, DOMPurify.sanitize(String(value)));
+            }
+
+            await getTransporter().sendMail({
+              from: `"${config.smtp.from.name}" <${config.smtp.from.email}>`,
+              to: sub.email,
+              subject: `Update: ${title}`,
+              html,
+            });
+            results.success++;
+          } catch (e: any) {
+            console.error(`Failed sending to ${sub.email}:`, e.message);
+            results.failed++;
+          }
+        }));
+      }
+
+      res.json({ success: true, sent: results.success, failed: results.failed });
+    } catch (err: any) {
+      console.error('Newsletter Broadcast Error:', err);
+      res.status(500).json({ error: err.message || 'Failed to broadcast newsletter' });
     }
   });
 
@@ -871,6 +1241,24 @@ async function startServer() {
       console.error('GSC Analytics error:', err);
       res.status(500).json({ error: 'Analytics failed', details: err instanceof Error ? err.message : String(err) });
     }
+  });
+
+  // ============================================
+  // GLOBAL ERROR HANDLERS
+  // ============================================
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({ error: `Route ${req.originalUrl} not found` });
+  });
+
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    console.error('[SERVER ERROR]:', err);
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', issues: err.issues });
+    }
+    const status = err.status || err.statusCode || 500;
+    res.status(status).json({ 
+      error: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
+    });
   });
 
   // ============================================
